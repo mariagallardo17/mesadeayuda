@@ -1,0 +1,116 @@
+<div class="profile-container">
+  <!-- Main Content -->
+  <div class="profile-content">
+    <div class="welcome-section">
+      <h1 class="welcome-title">BIENVENID@ {{ fullName }}</h1>
+    </div>
+
+    <!-- User Info Section -->
+    <div class="user-info-section">
+      <div class="user-info-card">
+        <div class="info-content">
+          <span class="info-label">Correo:</span>
+          <span class="info-value">{{ displayEmail }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="actions-section">
+      <button class="action-button" (click)="consultarPoliticas()">
+        <span class="button-text">Consultar políticas</span>
+      </button>
+
+      <button class="action-button" (click)="openPasswordModal()">
+        <span class="button-text">Cambiar Contraseña</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Password Change Modal -->
+  <div class="modal-overlay" *ngIf="showPasswordModal" (click)="closePasswordModal()">
+    <div class="modal-content" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <h3>Cambiar Contraseña</h3>
+        <button class="close-button" (click)="closePasswordModal()">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M18 6L6 18M6 6L18 18" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        </button>
+      </div>
+
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="currentPassword">Contraseña Actual</label>
+          <input
+            type="password"
+            id="currentPassword"
+            class="form-input"
+            [(ngModel)]="passwordForm.currentPassword"
+            placeholder="Ingresa tu contraseña actual"
+          >
+        </div>
+
+        <div class="form-group">
+          <label for="newPassword">Nueva Contraseña</label>
+          <input
+            type="password"
+            id="newPassword"
+            class="form-input"
+            [(ngModel)]="passwordForm.newPassword"
+            placeholder="Mínimo 7 caracteres (mayúscula, número y carácter especial)"
+          >
+          <div class="password-requirements" *ngIf="passwordForm.newPassword">
+            <p class="requirements-title">Requisitos de contraseña:</p>
+            <ul class="requirements-list">
+              <li [class.valid]="hasMinLength()">
+                <span class="check-icon">{{ getCheckIcon(hasMinLength()) }}</span>
+                Mínimo 7 caracteres
+              </li>
+              <li [class.valid]="hasUpperCase()">
+                <span class="check-icon">{{ getCheckIcon(hasUpperCase()) }}</span>
+                Al menos una letra mayúscula (A-Z)
+              </li>
+              <li [class.valid]="hasNumber()">
+                <span class="check-icon">{{ getCheckIcon(hasNumber()) }}</span>
+                Al menos un número (0-9)
+              </li>
+              <li [class.valid]="hasSpecialChar()">
+                <span class="check-icon">{{ getCheckIcon(hasSpecialChar()) }}</span>
+                Al menos un carácter especial (ej: !@#$%^&*)
+              </li>
+            </ul>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="confirmPassword">Confirmar Nueva Contraseña</label>
+          <input
+            type="password"
+            id="confirmPassword"
+            class="form-input"
+            [class.error]="passwordForm.confirmPassword && passwordForm.newPassword && passwordForm.newPassword !== passwordForm.confirmPassword"
+            [(ngModel)]="passwordForm.confirmPassword"
+            placeholder="Confirma tu nueva contraseña"
+          >
+          <div class="error-message" *ngIf="passwordForm.confirmPassword && passwordForm.newPassword && passwordForm.newPassword !== passwordForm.confirmPassword">
+            Las contraseñas no coinciden
+          </div>
+        </div>
+
+        <div class="error-message" *ngIf="passwordError">
+          {{ passwordError }}
+        </div>
+
+        <div class="success-message" *ngIf="passwordSuccess">
+          {{ passwordSuccess }}
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button class="btn btn-secondary" (click)="closePasswordModal()">Cancelar</button>
+        <button class="btn btn-primary" (click)="changePassword()">Cambiar Contraseña</button>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,203 @@
+<div class="assigned-tickets-container">
+  <!-- Header -->
+  <div class="tickets-header">
+    <h1>Tickets Asignados</h1>
+    <p class="header-subtitle">Gestiona los tickets asignados a ti</p>
+  </div>
+
+  <!-- Tabla de tickets -->
+  <div class="tickets-table-container">
+    <table class="tickets-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>FECHA</th>
+          <th>INFORMACIÓN</th>
+          <th>ESTADO</th>
+          <th>PRIORIDAD</th>
+          <th>TIEMPO RESTANTE</th>
+          <th>ACCIONES</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngFor="let ticket of tickets" class="ticket-row">
+          <td class="ticket-id">{{ ticket.id }}</td>
+          <td class="ticket-date">{{ ticket.fechaCreacion | date:'dd/MM/yyyy' }}</td>
+          <td class="ticket-info">
+            <div class="ticket-details">
+              <div class="ticket-category">{{ ticket.categoria }} - {{ ticket.subcategoria }}</div>
+              <div class="ticket-description">{{ ticket.descripcion | slice:0:50 }}{{ ticket.descripcion.length > 50 ? '...' : '' }}</div>
+            </div>
+          </td>
+          <td class="ticket-status">
+            <div class="status-indicator" [style.background-color]="getEstadoColor(ticket.estado)"></div>
+            <span class="status-text">{{ getEstadoLabel(ticket.estado) }}</span>
+          </td>
+          <td class="ticket-priority">{{ ticket.prioridad }}</td>
+          <td class="ticket-countdown">
+            <app-countdown
+              [ticketId]="ticket.id"
+              [creationDate]="parseDate(ticket.fechaCreacion)"
+              [targetTime]="ticket.tiempoEstimado"
+              [ticketStatus]="ticket.estado"
+              [showLabel]="false"
+              size="small">
+            </app-countdown>
+          </td>
+          <td class="ticket-actions">
+            <button class="action-btn view-btn" (click)="verDetalles(ticket)">
+              Ver
+            </button>
+          </td>
+        </tr>
+        <tr *ngIf="tickets.length === 0 && !isLoading">
+          <td colspan="7" class="no-tickets">No hay tickets asignados</td>
+        </tr>
+        <tr *ngIf="isLoading">
+          <td colspan="7" class="loading">Cargando tickets...</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Modal de detalles del ticket -->
+  <div class="modal-overlay" *ngIf="showTicketDetails" (click)="cerrarDetalles()">
+    <div class="modal-content" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <h2>Detalles del Ticket #{{ selectedTicket?.id }}</h2>
+        <button class="close-btn" (click)="cerrarDetalles()">×</button>
+      </div>
+
+      <!-- Notificación de cambio automático -->
+      <div class="auto-change-notification" *ngIf="showAutoChangeNotification">
+        <i class="fas fa-info-circle"></i>
+        <span>Estado cambiado automáticamente a "En Progreso"</span>
+      </div>
+
+      <div class="modal-body" *ngIf="selectedTicket">
+        <!-- Información básica -->
+        <div class="ticket-info-section">
+          <h3>Información del Ticket</h3>
+          <div class="info-grid">
+            <div class="info-item">
+              <label>Categoría:</label>
+              <span>{{ selectedTicket.categoria }}</span>
+            </div>
+            <div class="info-item">
+              <label>Subcategoría:</label>
+              <span>{{ selectedTicket.subcategoria }}</span>
+            </div>
+            <div class="info-item">
+              <label>Estado actual:</label>
+              <span class="status-badge" [style.background-color]="getEstadoColor(selectedTicket.estado)">
+                {{ getEstadoLabel(selectedTicket.estado) }}
+              </span>
+            </div>
+            <div class="info-item">
+              <label>Prioridad:</label>
+              <span class="priority-badge priority-{{ selectedTicket.prioridad.toLowerCase() }}">
+                {{ selectedTicket.prioridad }}
+              </span>
+            </div>
+            <div class="info-item">
+              <label>Fecha de creación:</label>
+              <span>{{ selectedTicket.fechaCreacion | date:'dd/MM/yyyy HH:mm' }}</span>
+            </div>
+            <div class="info-item">
+              <label>Tiempo estimado:</label>
+              <span>{{ selectedTicket.tiempoEstimado }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Descripción -->
+        <div class="description-section">
+          <h3>Descripción del Problema</h3>
+          <div class="description-content">{{ selectedTicket.descripcion }}</div>
+        </div>
+
+        <div class="pending-details" *ngIf="selectedTicket.pendienteMotivo">
+          <h3 class="pending-title">Ticket marcado como pendiente</h3>
+          <p class="pending-motive">{{ selectedTicket.pendienteMotivo }}</p>
+          <div class="pending-meta">
+            <span *ngIf="selectedTicket.pendienteTiempoEstimado">
+              <strong>Tiempo estimado:</strong> {{ selectedTicket.pendienteTiempoEstimado }}
+            </span>
+            <span *ngIf="selectedTicket.pendienteActualizadoEn">
+              <strong>Última actualización:</strong> {{ selectedTicket.pendienteActualizadoEn | date:'dd/MM/yyyy HH:mm' }}
+            </span>
+          </div>
+        </div>
+
+        <!-- Countdown -->
+        <div class="countdown-section">
+          <h3>Tiempo Restante</h3>
+          <app-countdown
+            [ticketId]="selectedTicket.id"
+            [creationDate]="parseDate(selectedTicket.fechaCreacion)"
+            [targetTime]="selectedTicket.tiempoEstimado"
+            [ticketStatus]="selectedTicket.estado"
+            [showLabel]="true"
+            size="large">
+          </app-countdown>
+        </div>
+
+        <!-- Formulario de cambio de estado -->
+        <div class="status-change-section">
+          <h3>Cambiar Estado del Ticket</h3>
+          <form [formGroup]="statusForm" (ngSubmit)="cambiarEstado()">
+            <div class="form-group">
+              <label for="nuevoEstado">Nuevo Estado:</label>
+              <select id="nuevoEstado" formControlName="nuevoEstado" class="form-control">
+                <option value="">Selecciona un estado</option>
+                <option *ngFor="let estado of estados" [value]="estado.value">
+                  {{ estado.label }}
+                </option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label for="comentarios">
+                Comentarios
+                <span *ngIf="statusForm.get('nuevoEstado')?.value === 'Pendiente'">(obligatorio)</span>
+              </label>
+              <textarea
+                id="comentarios"
+                formControlName="comentarios"
+                class="form-control"
+                rows="3"
+                placeholder="Agrega comentarios sobre el cambio de estado...">
+              </textarea>
+              <div class="error-message" *ngIf="statusForm.get('comentarios')?.invalid && statusForm.get('comentarios')?.touched">
+                *Describe el motivo del cambio (máximo 500 caracteres)
+              </div>
+            </div>
+
+            <div class="form-group" *ngIf="statusForm.get('nuevoEstado')?.value === 'Pendiente'">
+              <label for="pendienteTiempoEstimado">Tiempo estimado para retomar</label>
+              <input
+                id="pendienteTiempoEstimado"
+                type="text"
+                formControlName="pendienteTiempoEstimado"
+                class="form-control"
+                placeholder="Ejemplo: 2 horas"
+              />
+              <div class="error-message" *ngIf="statusForm.get('pendienteTiempoEstimado')?.invalid && statusForm.get('pendienteTiempoEstimado')?.touched">
+                *Indica el tiempo estimado (máximo 100 caracteres)
+              </div>
+            </div>
+
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary" [disabled]="!statusForm.valid">
+                Actualizar Estado
+              </button>
+              <button type="button" class="btn btn-secondary" (click)="cerrarDetalles()">
+                Cancelar
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

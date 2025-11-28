@@ -1,0 +1,153 @@
+.countdown-container {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  width: 100%;
+}
+
+.countdown-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 8px;
+  font-weight: 600;
+  transition: all 0.3s ease;
+  border: 2px solid;
+}
+
+/* Tamaños */
+.countdown-small .countdown-wrapper {
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+}
+
+.countdown-medium .countdown-wrapper {
+  padding: 0.5rem 0.75rem;
+  font-size: 0.9rem;
+}
+
+.countdown-large .countdown-wrapper {
+  padding: 0.75rem 1rem;
+  font-size: 1.1rem;
+}
+
+/* Estados */
+.countdown-normal {
+  background-color: #d4edda;
+  border-color: #c3e6cb;
+  color: #155724;
+}
+
+.countdown-warning {
+  background-color: #fff3cd;
+  border-color: #ffeaa7;
+  color: #856404;
+  animation: pulse 2s infinite;
+}
+
+.countdown-expired {
+  background-color: #f8d7da;
+  border-color: #f5c6cb;
+  color: #721c24;
+  animation: shake 0.5s ease-in-out infinite alternate;
+}
+
+.countdown-completed-ontime {
+  background-color: #d4edda;
+  border-color: #c3e6cb;
+  color: #155724;
+  font-weight: bold;
+}
+
+.countdown-completed-overdue {
+  background-color: #f8d7da;
+  border-color: #f5c6cb;
+  color: #721c24;
+  font-weight: bold;
+  animation: shake 0.5s ease-in-out infinite alternate;
+}
+
+/* Iconos */
+.countdown-icon {
+  font-size: 1.2em;
+  display: flex;
+  align-items: center;
+}
+
+/* Contenido */
+.countdown-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.125rem;
+}
+
+.countdown-time {
+  font-family: 'Courier New', monospace;
+  font-weight: bold;
+  letter-spacing: 0.05em;
+}
+
+.countdown-expired {
+  font-family: 'Courier New', monospace;
+  font-weight: bold;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  font-size: 0.8em;
+}
+
+.countdown-label {
+  font-size: 0.7em;
+  opacity: 0.8;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Animaciones */
+@keyframes pulse {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes shake {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(2px);
+  }
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .countdown-container {
+    flex-direction: column;
+  }
+
+  .countdown-wrapper {
+    flex-direction: column;
+    gap: 0.25rem;
+    text-align: center;
+  }
+
+  .countdown-small .countdown-wrapper {
+    font-size: 0.7rem;
+  }
+
+  .countdown-medium .countdown-wrapper {
+    font-size: 0.8rem;
+  }
+
+  .countdown-large .countdown-wrapper {
+    font-size: 0.9rem;
+  }
+}

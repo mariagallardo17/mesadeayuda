@@ -1,0 +1,56 @@
+<header class="app-header" *ngIf="currentUser">
+  <div class="header-content" [class.sidebar-collapsed]="isSidebarCollapsed">
+    <!-- Service Desk Title -->
+    <div class="header-left">
+      <button
+        type="button"
+        class="menu-toggle-button"
+        (click)="toggleSidebar()"
+        [attr.aria-expanded]="!isSidebarCollapsed"
+        aria-controls="sidebar-nav"
+        title="Abrir menú de navegación"
+      >
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
+      <h1 class="app-title">{{ currentSection || 'Service Desk' }}</h1>
+    </div>
+
+    <!-- User Profile Section -->
+    <div class="header-right">
+      <!-- Notifications -->
+      <div class="notifications-wrapper">
+        <app-notifications></app-notifications>
+      </div>
+
+      <!-- User Profile Dropdown -->
+      <div class="user-profile" (click)="toggleUserMenu()" [class.active]="showUserMenu">
+        <div class="user-info">
+          <span class="user-name">{{ getFullName() }}</span>
+          <span class="user-role">{{ getRoleLabel(currentUser.rol) }}</span>
+        </div>
+        <div class="user-avatar">
+          <span class="user-initials">{{ getUserInitials() }}</span>
+        </div>
+      </div>
+
+      <!-- User Menu Dropdown -->
+      <div class="user-menu" *ngIf="showUserMenu" (click)="closeUserMenu()">
+        <div class="user-menu-content" (click)="$event.stopPropagation()">
+          <!-- User Info in Menu -->
+          <div class="menu-user-info">
+            <div class="menu-user-avatar">
+              <span class="menu-user-initials">{{ getUserInitials() }}</span>
+            </div>
+            <div class="menu-user-details">
+              <span class="menu-user-name">{{ getFullName() }}</span>
+              <span class="menu-user-role">{{ getRoleLabel(currentUser.rol) }}</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </div>
+  </div>
+</header>

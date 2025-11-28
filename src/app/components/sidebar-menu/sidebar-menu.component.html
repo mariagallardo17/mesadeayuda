@@ -1,0 +1,216 @@
+<!-- Overlay para móviles -->
+<div *ngIf="!isCollapsed" class="sidebar-overlay" (click)="toggleMenu()"></div>
+
+<!-- Botón flotante para abrir el menú cuando está cerrado -->
+<div *ngIf="isCollapsed" class="floating-menu-button" (click)="toggleMenu()" title="Abrir Menú">
+  <div class="hamburger-icon">
+    <span></span>
+    <span></span>
+    <span></span>
+  </div>
+</div>
+
+<div class="sidebar-container" [class.collapsed]="isCollapsed">
+  <!-- Header del menú -->
+  <div class="sidebar-header">
+    <div class="menu-toggle" (click)="toggleMenu()">
+      <div class="hamburger" [class.active]="!isCollapsed">
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+    </div>
+    <h2 class="menu-title">Menú</h2>
+  </div>
+
+  <!-- Contenedor del menú con scroll -->
+  <div class="menu-scroll-container" [class.collapsed]="isCollapsed">
+    <nav class="sidebar-nav">
+      <!-- Inicio - Para todos los usuarios -->
+      <a
+        class="menu-item"
+        [class.active]="currentRoutePath === '/profile'"
+        (click)="navigateTo('/profile')"
+        title="Inicio"
+      >
+        <div class="menu-icon">🏠</div>
+        <span class="menu-text">Inicio</span>
+      </a>
+
+      <!-- Levantar Ticket - Solo para empleados -->
+      <a
+        *ngIf="isEmpleado"
+        class="menu-item"
+        [class.active]="currentRoutePath === '/tickets/new'"
+        (click)="navigateTo('/tickets/new')"
+        title="Levantar Ticket"
+      >
+        <div class="menu-icon">📝</div>
+        <span class="menu-text">Levantar Ticket</span>
+      </a>
+
+      <!-- Seguimiento de tickets - Solo para empleados -->
+      <a
+        *ngIf="isEmpleado"
+        class="menu-item"
+        [class.active]="currentRoutePath === '/tickets/tracking'"
+        (click)="navigateTo('/tickets/tracking')"
+        title="Seguimiento de tickets"
+      >
+        <div class="menu-icon">🔍</div>
+        <span class="menu-text">Seguimiento de tickets</span>
+      </a>
+
+      <!-- Tickets Reabiertos - Solo para empleados -->
+      <a
+        *ngIf="isEmpleado"
+        class="menu-item"
+        [class.active]="currentRoutePath === '/tickets/reopened'"
+        (click)="navigateTo('/tickets/reopened')"
+        title="Tickets Reabiertos"
+      >
+        <div class="menu-icon">♻️</div>
+        <span class="menu-text">Tickets Reabiertos</span>
+      </a>
+
+      <!-- Cerrar Ticket - Solo para empleados -->
+      <a
+        *ngIf="isEmpleado"
+        class="menu-item"
+        [class.active]="currentRoutePath === '/tickets/close'"
+        (click)="navigateTo('/tickets/close')"
+        title="Cerrar Ticket"
+      >
+        <div class="menu-icon">✅</div>
+        <span class="menu-text">Cerrar Ticket</span>
+      </a>
+
+      <!-- Ayuda - Solo para empleados -->
+      <a
+        *ngIf="isEmpleado"
+        class="menu-item"
+        [class.active]="currentRoutePath === '/help'"
+        (click)="navigateTo('/help')"
+        title="Ayuda"
+      >
+        <div class="menu-icon">❓</div>
+        <span class="menu-text">Ayuda</span>
+      </a>
+
+      <!-- Resumen de Tickets - Solo para empleados -->
+      <a
+        *ngIf="isEmpleado"
+        class="menu-item"
+        [class.active]="currentRoutePath === '/tickets/summary'"
+        (click)="navigateTo('/tickets/summary')"
+        title="Resumen de Tickets"
+      >
+        <div class="menu-icon">📊</div>
+        <span class="menu-text">Resumen de Tickets</span>
+      </a>
+
+
+      <!-- Mis Tickets - Para técnicos y administradores -->
+      <a
+        *ngIf="isTecnico || isAdmin"
+        class="menu-item"
+        [class.active]="currentRoutePath === '/tickets/my-tickets'"
+        (click)="navigateTo('/tickets/my-tickets')"
+        title="Mis Tickets"
+      >
+        <div class="menu-icon">📋</div>
+        <span class="menu-text">Mis Tickets</span>
+      </a>
+
+      <!-- Tickets Reabiertos - Para técnicos y administradores -->
+      <a
+        *ngIf="isTecnico || isAdmin"
+        class="menu-item"
+        [class.active]="currentRoutePath === '/tickets/reopened'"
+        (click)="navigateTo('/tickets/reopened')"
+        title="Tickets Reabiertos"
+      >
+        <div class="menu-icon">♻️</div>
+        <span class="menu-text">Tickets Reabiertos</span>
+      </a>
+
+      <!-- Tickets Escalados - Para técnicos y administradores -->
+      <a
+        *ngIf="isTecnico || isAdmin"
+        class="menu-item"
+        [class.active]="currentRoutePath === '/tickets/escalated'"
+        (click)="navigateTo('/tickets/escalated')"
+        title="Tickets Escalados"
+      >
+        <div class="menu-icon">🚨</div>
+        <span class="menu-text">Tickets Escalados</span>
+      </a>
+
+      <!-- Gestión de Usuarios - Solo para administradores -->
+      <a
+        *ngIf="isAdmin"
+        class="menu-item"
+        [class.active]="currentRoutePath === '/users'"
+        (click)="navigateTo('/users')"
+        title="Gestión de Usuarios"
+      >
+        <div class="menu-icon">👥</div>
+        <span class="menu-text">Gestión de Usuarios</span>
+      </a>
+
+      <!-- Asignaciones Automáticas - Oculto ya que funciona automáticamente -->
+      <!--
+      <a
+        *ngIf="isAdmin"
+        class="menu-item"
+        [class.active]="currentRoutePath === '/assignments'"
+        (click)="navigateTo('/assignments')"
+        title="Asignaciones Automáticas"
+      >
+        <div class="menu-icon">🤖</div>
+        <span class="menu-text">Asignaciones Automáticas</span>
+      </a>
+      -->
+
+      <!-- Catálogo de Servicios - Solo para administradores -->
+      <a
+        *ngIf="isAdmin"
+        class="menu-item"
+        [class.active]="currentRoutePath === '/services/catalog'"
+        (click)="navigateTo('/services/catalog')"
+        title="Catálogo de Servicios"
+      >
+        <div class="menu-icon">📚</div>
+        <span class="menu-text">Catálogo de Servicios</span>
+      </a>
+
+      <!-- Reportes - Solo para administradores -->
+      <a
+        *ngIf="isAdmin"
+        class="menu-item"
+        [class.active]="currentRoutePath === '/reports'"
+        (click)="navigateTo('/reports')"
+        title="Reportes de Gestión"
+      >
+        <div class="menu-icon">📊</div>
+        <span class="menu-text">Reportes</span>
+      </a>
+
+    </nav>
+  </div>
+
+  <!-- Footer del menú -->
+  <div class="sidebar-footer">
+    <div class="user-info">
+      <div class="user-avatar">👤</div>
+      <div class="user-details" *ngIf="!isCollapsed">
+        <span class="user-name">{{ currentUser?.nombre }} {{ currentUser?.apellido }}</span>
+        <span class="user-role">{{ currentUser?.rol | titlecase }}</span>
+      </div>
+    </div>
+    <button class="logout-btn" (click)="logout()" title="Cerrar Sesión">
+      <span class="logout-icon">🚪</span>
+      <span class="logout-text" *ngIf="!isCollapsed">Cerrar Sesión</span>
+    </button>
+  </div>
+</div>

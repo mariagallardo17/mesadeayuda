@@ -1,0 +1,439 @@
+<div class="manage-assignments-container">
+  <!-- Header -->
+  <div class="header">
+    <h1>🤖 Gestión de Asignaciones Automáticas</h1>
+    <p>Administra las especialidades de técnicos y reglas de asignación automática</p>
+  </div>
+
+  <!-- Mensajes -->
+  <div *ngIf="message" class="alert" [ngClass]="'alert-' + messageType">
+    {{ message }}
+    <button type="button" class="close-btn" (click)="clearMessages()">×</button>
+  </div>
+
+  <!-- Pestañas -->
+  <div class="tabs">
+    <button
+      class="tab-btn"
+      [class.active]="activeTab === 'specialties'"
+      (click)="setActiveTab('specialties')">
+      👥 Especialidades
+    </button>
+    <button
+      class="tab-btn"
+      [class.active]="activeTab === 'rules'"
+      (click)="setActiveTab('rules')">
+      ⚙️ Reglas de Asignación
+    </button>
+    <button
+      class="tab-btn"
+      [class.active]="activeTab === 'stats'"
+      (click)="setActiveTab('stats')">
+      📊 Estadísticas
+    </button>
+    <button
+      class="tab-btn"
+      [class.active]="activeTab === 'test'"
+      (click)="setActiveTab('test')">
+      🧪 Probar Asignación
+    </button>
+  </div>
+
+  <!-- Contenido de Especialidades -->
+  <div *ngIf="activeTab === 'specialties'" class="tab-content">
+    <div class="section-header">
+      <h2>👥 Especialidades de Técnicos</h2>
+      <div class="actions">
+        <button class="btn btn-primary" (click)="showSpecialtyForm = !showSpecialtyForm">
+          ➕ Agregar Especialidad
+        </button>
+        <button class="btn btn-secondary" (click)="loadSpecialties()" [disabled]="loadingSpecialties">
+          🔄 Actualizar
+        </button>
+      </div>
+    </div>
+
+    <!-- Formulario de nueva especialidad -->
+    <div *ngIf="showSpecialtyForm" class="form-container">
+      <h3>Nueva Especialidad</h3>
+      <form (ngSubmit)="createSpecialty()">
+        <div class="form-group">
+          <label for="tecnico">Técnico:</label>
+          <select id="tecnico" [(ngModel)]="newSpecialty.usuario_id" name="usuario_id" required>
+            <option value="">Seleccionar técnico</option>
+            <option *ngFor="let user of users" [value]="user.id">
+              {{ user.nombre }} ({{ user.correo }})
+            </option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="area">Área de Especialización:</label>
+          <select id="area" [(ngModel)]="newSpecialty.area_especialidad" name="area_especialidad" required>
+            <option value="">Seleccionar área</option>
+            <option *ngFor="let area of getAvailableAreas()" [value]="area">
+              {{ formatArea(area) }}
+            </option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="nivel">Nivel de Expertise:</label>
+          <select id="nivel" [(ngModel)]="newSpecialty.nivel_expertise" name="nivel_expertise" required>
+            <option *ngFor="let level of getAvailableExpertiseLevels()" [value]="level">
+              {{ formatExpertise(level) }}
+            </option>
+          </select>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Crear Especialidad</button>
+          <button type="button" class="btn btn-secondary" (click)="resetSpecialtyForm()">Cancelar</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Lista de especialidades -->
+    <div class="search-container">
+      <input
+        type="text"
+        placeholder="Buscar especialidades..."
+        [(ngModel)]="specialtySearchTerm"
+        class="search-input">
+    </div>
+
+    <div *ngIf="loadingSpecialties" class="loading">
+      <div class="spinner"></div>
+      <p>Cargando especialidades...</p>
+    </div>
+
+    <div *ngIf="!loadingSpecialties && filteredSpecialties.length === 0" class="empty-state">
+      <p>No se encontraron especialidades</p>
+    </div>
+
+    <div *ngIf="!loadingSpecialties && filteredSpecialties.length > 0" class="specialties-grid">
+      <div *ngFor="let specialty of filteredSpecialties" class="specialty-card">
+        <div class="specialty-header">
+          <h4>{{ specialty.tecnico_nombre }}</h4>
+          <span class="status-badge" [class.active]="specialty.activo" [class.inactive]="!specialty.activo">
+            {{ specialty.activo ? 'Activo' : 'Inactivo' }}
+          </span>
+        </div>
+
+        <div class="specialty-body">
+          <div class="area-info">
+            <span class="area-label">{{ formatArea(specialty.area_especialidad) }}</span>
+            <span class="expertise-badge" [style.background-color]="getExpertiseColor(specialty.nivel_expertise)">
+              {{ formatExpertise(specialty.nivel_expertise) }}
+            </span>
+          </div>
+
+          <div class="specialty-meta">
+            <small>{{ specialty.tecnico_correo }}</small>
+            <small>Asignado: {{ specialty.fecha_asignacion | date:'short' }}</small>
+          </div>
+        </div>
+
+        <div class="specialty-actions">
+          <button
+            class="btn btn-sm"
+            [class.btn-success]="!specialty.activo"
+            [class.btn-warning]="specialty.activo"
+            (click)="toggleSpecialtyStatus(specialty)">
+            {{ specialty.activo ? 'Desactivar' : 'Activar' }}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Contenido de Reglas de Asignación -->
+  <div *ngIf="activeTab === 'rules'" class="tab-content">
+    <div class="section-header">
+      <h2>⚙️ Reglas de Asignación</h2>
+      <div class="actions">
+        <button class="btn btn-primary" (click)="showRuleForm = !showRuleForm">
+          ➕ Agregar Regla
+        </button>
+        <button class="btn btn-secondary" (click)="loadAssignmentRules()" [disabled]="loadingRules">
+          🔄 Actualizar
+        </button>
+      </div>
+    </div>
+
+    <!-- Formulario de nueva regla -->
+    <div *ngIf="showRuleForm" class="form-container">
+      <h3>Nueva Regla de Asignación</h3>
+      <form (ngSubmit)="createRule()">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="servicio">Servicio:</label>
+            <select id="servicio" [(ngModel)]="newRule.servicio_id" name="servicio_id" required>
+              <option value="">Seleccionar servicio</option>
+              <option *ngFor="let service of services" [value]="service.id">
+                {{ service.categoria }} - {{ service.subcategoria }}
+              </option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="area">Área:</label>
+            <select id="area" [(ngModel)]="newRule.area_servicio" name="area_servicio" required>
+              <option value="">Seleccionar área</option>
+              <option *ngFor="let area of getAvailableAreas()" [value]="area">
+                {{ formatArea(area) }}
+              </option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="prioridad">Prioridad:</label>
+            <select id="prioridad" [(ngModel)]="newRule.prioridad_ticket" name="prioridad_ticket" required>
+              <option *ngFor="let priority of getAvailablePriorities()" [value]="priority">
+                {{ formatPriority(priority) }}
+              </option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="carga">Carga Máxima:</label>
+            <input
+              type="number"
+              id="carga"
+              [(ngModel)]="newRule.carga_maxima"
+              name="carga_maxima"
+              min="1"
+              max="20"
+              required>
+          </div>
+        </div>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label for="principal">Técnico Principal:</label>
+            <select id="principal" [(ngModel)]="newRule.tecnico_principal_id" name="tecnico_principal_id">
+              <option value="">Sin asignar</option>
+              <option *ngFor="let user of getTechniciansForArea(newRule.area_servicio)" [value]="user.id">
+                {{ user.nombre }}
+              </option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="secundario">Técnico Secundario:</label>
+            <select id="secundario" [(ngModel)]="newRule.tecnico_secundario_id" name="tecnico_secundario_id">
+              <option value="">Sin asignar</option>
+              <option *ngFor="let user of getTechniciansForArea(newRule.area_servicio)" [value]="user.id">
+                {{ user.nombre }}
+              </option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="soporte">Técnico de Soporte:</label>
+          <select id="soporte" [(ngModel)]="newRule.tecnico_soporte_id" name="tecnico_soporte_id">
+            <option value="">Sin asignar</option>
+            <option *ngFor="let user of getTechniciansForArea(newRule.area_servicio)" [value]="user.id">
+              {{ user.nombre }}
+            </option>
+          </select>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Crear Regla</button>
+          <button type="button" class="btn btn-secondary" (click)="resetRuleForm()">Cancelar</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Lista de reglas -->
+    <div class="search-container">
+      <input
+        type="text"
+        placeholder="Buscar reglas..."
+        [(ngModel)]="ruleSearchTerm"
+        class="search-input">
+    </div>
+
+    <div *ngIf="loadingRules" class="loading">
+      <div class="spinner"></div>
+      <p>Cargando reglas...</p>
+    </div>
+
+    <div *ngIf="!loadingRules && filteredRules.length === 0" class="empty-state">
+      <p>No se encontraron reglas de asignación</p>
+    </div>
+
+    <div *ngIf="!loadingRules && filteredRules.length > 0" class="rules-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Área</th>
+            <th>Servicio</th>
+            <th>Prioridad</th>
+            <th>Técnico Principal</th>
+            <th>Técnico Secundario</th>
+            <th>Carga Máxima</th>
+            <th>Estado</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let rule of filteredRules">
+            <td>{{ formatArea(rule.area_servicio) }}</td>
+            <td>{{ rule.categoria }} - {{ rule.subcategoria }}</td>
+            <td>
+              <span class="priority-badge" [style.background-color]="getPriorityColor(rule.prioridad_ticket)">
+                {{ formatPriority(rule.prioridad_ticket) }}
+              </span>
+            </td>
+            <td>{{ rule.tecnico_principal_nombre || 'Sin asignar' }}</td>
+            <td>{{ rule.tecnico_secundario_nombre || 'Sin asignar' }}</td>
+            <td>{{ rule.carga_maxima }}</td>
+            <td>
+              <span class="status-badge" [class.active]="rule.activo" [class.inactive]="!rule.activo">
+                {{ rule.activo ? 'Activo' : 'Inactivo' }}
+              </span>
+            </td>
+            <td>
+              <button
+                class="btn btn-sm"
+                [class.btn-success]="!rule.activo"
+                [class.btn-warning]="rule.activo"
+                (click)="toggleRuleStatus(rule)">
+                {{ rule.activo ? 'Desactivar' : 'Activar' }}
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Contenido de Estadísticas -->
+  <div *ngIf="activeTab === 'stats'" class="tab-content">
+    <div class="section-header">
+      <h2>📊 Estadísticas y Monitoreo</h2>
+      <button class="btn btn-secondary" (click)="loadAllData()">
+        🔄 Actualizar Datos
+      </button>
+    </div>
+
+    <!-- Carga de trabajo de técnicos -->
+    <div class="stats-section">
+      <h3>👥 Carga de Trabajo de Técnicos</h3>
+      <div *ngIf="loadingWorkload" class="loading">
+        <div class="spinner"></div>
+        <p>Cargando datos...</p>
+      </div>
+
+      <div *ngIf="!loadingWorkload && technicianWorkload.length > 0" class="workload-grid">
+        <div *ngFor="let tech of technicianWorkload" class="workload-card">
+          <div class="tech-name">{{ tech.nombre }}</div>
+          <div class="workload-stats">
+            <div class="stat">
+              <span class="stat-label">Total Activos:</span>
+              <span class="stat-value">{{ tech.tickets_activos }}</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Abiertos:</span>
+              <span class="stat-value">{{ tech.tickets_abiertos }}</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">En Proceso:</span>
+              <span class="stat-value">{{ tech.tickets_proceso }}</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Pendientes:</span>
+              <span class="stat-value">{{ tech.tickets_pendientes }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Estadísticas de asignación -->
+    <div class="stats-section">
+      <h3>📈 Estadísticas de Asignación</h3>
+      <div *ngIf="loadingStats" class="loading">
+        <div class="spinner"></div>
+        <p>Cargando estadísticas...</p>
+      </div>
+
+      <div *ngIf="!loadingStats && assignmentStats.length > 0" class="stats-grid">
+        <div *ngFor="let stat of assignmentStats" class="stat-card">
+          <h4>{{ formatArea(stat.area_servicio) }}</h4>
+          <p><strong>Prioridad:</strong> {{ formatPriority(stat.prioridad_ticket) }}</p>
+          <p><strong>Reglas Activas:</strong> {{ stat.reglas_activas }}</p>
+          <p><strong>Técnico Principal:</strong> {{ stat.tecnico_principal || 'Sin asignar' }}</p>
+          <p><strong>Técnico Secundario:</strong> {{ stat.tecnico_secundario || 'Sin asignar' }}</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Contenido de Prueba de Asignación -->
+  <div *ngIf="activeTab === 'test'" class="tab-content">
+    <div class="section-header">
+      <h2>🧪 Probar Asignación Automática</h2>
+      <p>Simula una asignación automática para verificar que las reglas funcionen correctamente</p>
+    </div>
+
+    <div class="test-form-container">
+      <form (ngSubmit)="testAssignment()">
+        <div class="form-row">
+          <div class="form-group">
+            <label for="test-servicio">Servicio:</label>
+            <select id="test-servicio" [(ngModel)]="testAssignmentData.servicio_id" name="servicio_id" required>
+              <option value="">Seleccionar servicio</option>
+              <option *ngFor="let service of services" [value]="service.id">
+                {{ service.categoria }} - {{ service.subcategoria }}
+              </option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <label for="test-prioridad">Prioridad:</label>
+            <select id="test-prioridad" [(ngModel)]="testAssignmentData.prioridad" name="prioridad" required>
+              <option *ngFor="let priority of getAvailablePriorities()" [value]="priority">
+                {{ formatPriority(priority) }}
+              </option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="submit" class="btn btn-primary">Probar Asignación</button>
+        </div>
+      </form>
+    </div>
+
+    <!-- Resultado de la prueba -->
+    <div *ngIf="testResult" class="test-result">
+      <h3>Resultado de la Prueba</h3>
+      <div class="result-card" [ngClass]="testResult.success ? 'success' : 'error'">
+        <div *ngIf="testResult.success" class="result-success">
+          <h4>✅ Asignación Exitosa</h4>
+          <p><strong>Técnico Asignado:</strong> {{ testResult.tecnico.nombre }}</p>
+          <p><strong>Área:</strong> {{ formatArea(testResult.areaServicio) }}</p>
+          <p><strong>Nivel:</strong> {{ formatExpertise(testResult.tecnico.nivel) }}</p>
+          <p *ngIf="testResult.fallback" class="warning">
+            ⚠️ Se usó asignación de respaldo (fallback)
+          </p>
+          <p *ngIf="testResult.general" class="info">
+            ℹ️ Se asignó a técnico general (sin especialidad específica)
+          </p>
+        </div>
+
+        <div *ngIf="!testResult.success" class="result-error">
+          <h4>❌ Asignación Fallida</h4>
+          <p><strong>Error:</strong> {{ testResult.error }}</p>
+          <p><strong>Área:</strong> {{ formatArea(testResult.areaServicio) }}</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
