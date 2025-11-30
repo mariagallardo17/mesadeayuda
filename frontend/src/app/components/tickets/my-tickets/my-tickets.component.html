@@ -253,12 +253,6 @@
         </div>
       </div>
 
-      <!-- Botones de acción -->
-      <div class="action-buttons">
-        <button class="escalar-btn" (click)="abrirEscalamiento()" *ngIf="selectedTicket.estado !== 'Cerrado'">Escalar</button>
-        <button class="cerrar-btn" (click)="cerrarDetalles()">Cerrar detalles</button>
-      </div>
-
       <!-- Panel de cambio de estado - Solo para técnicos y administradores, NO para tickets cerrados -->
       <div class="status-changer" *ngIf="puedeCambiarEstados && selectedTicket.estado !== 'Cerrado'">
         <h3>Da click para cambiar estado del ticket</h3>
