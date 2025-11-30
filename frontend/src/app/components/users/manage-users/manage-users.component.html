@@ -1,0 +1,399 @@
+<div class="manage-users-container">
+  <!-- Header -->
+  <div class="header">
+    <h1>Gestión de Usuarios</h1>
+    <div class="user-icon">👥</div>
+  </div>
+
+  <!-- Messages -->
+  <div class="messages" *ngIf="errorMessage || successMessage">
+    <div class="alert alert-error" *ngIf="errorMessage">
+      <i class="icon">⚠️</i>
+      {{ errorMessage }}
+    </div>
+    <div class="alert alert-success" *ngIf="successMessage">
+      <i class="icon">✅</i>
+      {{ successMessage }}
+    </div>
+  </div>
+
+  <!-- Main Layout -->
+  <div class="main-layout" [class.with-panels]="showActionsPanel || showAddForm || showEditForm">
+    <!-- Left Panel - Main Content -->
+    <div class="left-panel">
+      <!-- Search Bar -->
+      <div class="search-container">
+        <div class="search-box">
+          <input
+            type="text"
+            placeholder="Buscar por ID o nombre del usuario... "
+            [(ngModel)]="searchQuery"
+            (input)="onSearchChange($event)"
+            (keydown.enter)="onSearchEnter()"
+            class="search-input"
+            [disabled]="isLoading"
+          >
+          <i class="search-icon search-icon-right">🔍</i>
+        </div>
+      </div>
+
+      <!-- Users Table -->
+      <div class="table-container">
+        <div class="loading" *ngIf="isLoading">
+          <div class="spinner"></div>
+          <p>Cargando usuarios...</p>
+        </div>
+
+        <table class="users-table" *ngIf="!isLoading">
+          <thead>
+            <tr>
+              <th>ID- Nombre</th>
+              <th>Correo Electrónico</th>
+              <th>Rol</th>
+              <th>Estado</th>
+              <th>Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr *ngFor="let user of filteredUsers; trackBy: trackByUserId"
+                class="user-row"
+                [class.selected]="selectedUser?.id === user.id"
+                (click)="selectUser(user)">
+              <td class="user-info">
+                <div class="user-avatar">
+                  <span class="avatar-text">{{ user.nombre.charAt(0) }}{{ user.apellido.charAt(0) }}</span>
+                </div>
+                <div class="user-details">
+                  <div class="user-name">{{ user.nombre }} {{ user.apellido }}</div>
+                  <div class="user-id">ID: {{ user.id }}</div>
+                </div>
+              </td>
+              <td class="user-email">{{ user.email }}</td>
+              <td>
+                <span class="role-badge" [ngClass]="getRoleColor(user.rol)">
+                  {{ getRoleLabel(user.rol) }}
+                </span>
+              </td>
+              <td>
+                <span class="status-badge" [ngClass]="getStatusColor(user.activo)">
+                  {{ getStatusLabel(user.activo) }}
+                </span>
+              </td>
+              <td class="actions">
+                <button class="action-trigger" (click)="showUserActions(user, $event)">
+                  <i class="icon">⋯</i>
+                </button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="no-results" *ngIf="!isLoading && filteredUsers.length === 0">
+          <i class="icon">👥</i>
+          <p>No se encontraron usuarios</p>
+          <small *ngIf="searchQuery">Intenta con otros términos de búsqueda</small>
+        </div>
+      </div>
+
+      <!-- Add User Button -->
+      <div class="add-user-container">
+        <button class="btn btn-primary add-user-btn" (click)="showAddUserForm()" [disabled]="isLoading">
+          Agregar Nuevo Usuario
+        </button>
+      </div>
+    </div>
+
+    <!-- Right Panel - Actions and Forms -->
+    <div class="right-panel">
+      <!-- User Actions Panel -->
+      <div class="actions-panel" *ngIf="showActionsPanel && selectedUser">
+        <div class="panel-header">
+          <h3>Acciones de Usuario</h3>
+        </div>
+        <div class="actions-list">
+          <button class="action-item" (click)="showEditUserForm(selectedUser)">
+            <i class="icon">✏️</i>
+            Editar
+          </button>
+          <button class="action-item" (click)="deleteUser(selectedUser)">
+            <i class="icon">🗑️</i>
+            Eliminar
+          </button>
+          <button class="action-item" (click)="resetPassword(selectedUser)">
+            <i class="icon">🔑</i>
+            Resetear contraseña
+          </button>
+        </div>
+      </div>
+
+      <!-- Add User Form Panel -->
+      <div class="form-panel" *ngIf="showAddForm">
+        <div class="panel-header">
+          <h3>Agregar Usuario</h3>
+          <button class="close-btn" (click)="hideForms()">×</button>
+        </div>
+
+        <form [formGroup]="addUserForm" (ngSubmit)="onSubmitAddUser()" class="user-form" autocomplete="off">
+          <div class="form-group">
+            <label for="add-nombre">Nombre</label>
+            <input
+              type="text"
+              id="add-nombre"
+              formControlName="nombre"
+              class="form-input"
+              [class.error]="addNombre?.invalid && addNombre?.touched"
+              placeholder="Ingrese el nombre"
+              autocomplete="off"
+              autocorrect="off"
+              autocapitalize="off"
+              spellcheck="false"
+            >
+            <div class="error-message" *ngIf="addNombre?.invalid && addNombre?.touched">
+              <span *ngIf="addNombre?.errors?.['required']">El nombre es requerido</span>
+              <span *ngIf="addNombre?.errors?.['minlength']">El nombre debe tener al menos 2 caracteres</span>
+            </div>
+          </div>
+
+
+          <div class="form-group">
+            <label for="add-email">Correo</label>
+            <input
+              type="email"
+              id="add-email"
+              formControlName="email"
+              class="form-input"
+              [class.error]="addEmail?.invalid && addEmail?.touched"
+              placeholder="usuario@gmail.com"
+              autocomplete="off"
+              autocorrect="off"
+              autocapitalize="off"
+              spellcheck="false"
+            >
+            <div class="error-message" *ngIf="addEmail?.invalid && addEmail?.touched">
+              <span *ngIf="addEmail?.errors?.['required']">El correo es requerido</span>
+              <span *ngIf="addEmail?.errors?.['email']">Ingrese un correo válido</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="add-password">Contraseña</label>
+            <input
+              type="password"
+              id="add-password"
+              formControlName="password"
+              class="form-input"
+              [class.error]="addPassword?.invalid && addPassword?.touched"
+              placeholder="Mínimo 7 caracteres (mayúscula, número y carácter especial)"
+              autocomplete="new-password"
+              autocorrect="off"
+              autocapitalize="off"
+              spellcheck="false"
+            >
+            <div class="error-message" *ngIf="addPassword?.invalid && addPassword?.touched">
+              <span *ngIf="addPassword?.errors?.['required']">La contraseña es requerida</span>
+              <span *ngIf="addPassword?.errors?.['minlength']?.message">{{ addPassword?.errors?.['minlength']?.message }}</span>
+              <span *ngIf="addPassword?.errors?.['noUpperCase']?.message">{{ addPassword?.errors?.['noUpperCase']?.message }}</span>
+              <span *ngIf="addPassword?.errors?.['noNumber']?.message">{{ addPassword?.errors?.['noNumber']?.message }}</span>
+              <span *ngIf="addPassword?.errors?.['noSpecialChar']?.message">{{ addPassword?.errors?.['noSpecialChar']?.message }}</span>
+            </div>
+            <small class="form-hint">Requisitos: Mínimo 7 caracteres, mayúscula, número y carácter especial</small>
+          </div>
+
+          <div class="form-group">
+            <label for="add-departamento">Departamento</label>
+            <select
+              id="add-departamento"
+              formControlName="departamento"
+              class="form-select"
+              [class.error]="addDepartamento?.invalid && addDepartamento?.touched"
+            >
+              <option value="">Seleccione un departamento</option>
+              <option *ngFor="let dept of departments" [value]="dept">
+                {{ dept }}
+              </option>
+            </select>
+            <div class="error-message" *ngIf="addDepartamento?.invalid && addDepartamento?.touched">
+              <span *ngIf="addDepartamento?.errors?.['required']">El departamento es requerido</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="add-rol">Rol</label>
+            <select
+              id="add-rol"
+              formControlName="rol"
+              class="form-select"
+              [class.error]="addRol?.invalid && addRol?.touched"
+            >
+              <option value="">Seleccione un rol</option>
+              <option *ngFor="let role of getAvailableRolesForAdd()" [value]="role">
+                {{ getRoleLabel(role) }}
+              </option>
+            </select>
+            <div class="error-message" *ngIf="addRol?.invalid && addRol?.touched">
+              <span *ngIf="addRol?.errors?.['required']">El rol es requerido</span>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" [disabled]="addUserForm.invalid || isLoading">
+              <span *ngIf="isLoading" class="spinner-small"></span>
+              Agregar Usuario
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Edit User Form Panel -->
+      <div class="form-panel" *ngIf="showEditForm">
+        <div class="panel-header">
+          <h3>Editar Usuario</h3>
+          <button class="close-btn" (click)="hideForms()">×</button>
+        </div>
+
+        <form [formGroup]="editUserForm" (ngSubmit)="onSubmitEditUser()" class="user-form">
+          <div class="form-group">
+            <label for="edit-nombre">Nombre</label>
+            <input
+              type="text"
+              id="edit-nombre"
+              formControlName="nombre"
+              class="form-input"
+              [class.error]="editNombre?.invalid && editNombre?.touched"
+              placeholder="Ingrese el nombre"
+            >
+            <div class="error-message" *ngIf="editNombre?.invalid && editNombre?.touched">
+              <span *ngIf="editNombre?.errors?.['required']">El nombre es requerido</span>
+              <span *ngIf="editNombre?.errors?.['minlength']">El nombre debe tener al menos 2 caracteres</span>
+            </div>
+          </div>
+
+
+          <div class="form-group">
+            <label for="edit-email">Correo</label>
+            <input
+              type="email"
+              id="edit-email"
+              formControlName="email"
+              class="form-input"
+              [class.error]="editEmail?.invalid && editEmail?.touched"
+              placeholder="usuario@empresa.com"
+            >
+            <div class="error-message" *ngIf="editEmail?.invalid && editEmail?.touched">
+              <span *ngIf="editEmail?.errors?.['required']">El correo es requerido</span>
+              <span *ngIf="editEmail?.errors?.['email']">Ingrese un correo válido</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="edit-departamento">Departamento</label>
+            <select
+              id="edit-departamento"
+              formControlName="departamento"
+              class="form-select"
+              [class.error]="editDepartamento?.invalid && editDepartamento?.touched"
+            >
+              <option value="">Seleccione un departamento</option>
+              <option *ngFor="let dept of departments" [value]="dept">
+                {{ dept }}
+              </option>
+            </select>
+            <div class="error-message" *ngIf="editDepartamento?.invalid && editDepartamento?.touched">
+              <span *ngIf="editDepartamento?.errors?.['required']">El departamento es requerido</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="edit-rol">Rol</label>
+            <select
+              id="edit-rol"
+              formControlName="rol"
+              class="form-select"
+              [class.error]="editRol?.invalid && editRol?.touched"
+            >
+              <option value="">Seleccione un rol</option>
+              <option *ngFor="let role of getAvailableRolesForEdit()" [value]="role">
+                {{ getRoleLabel(role) }}
+              </option>
+            </select>
+            <div class="error-message" *ngIf="editRol?.invalid && editRol?.touched">
+              <span *ngIf="editRol?.errors?.['required']">El rol es requerido</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input
+                type="checkbox"
+                formControlName="activo"
+                class="form-checkbox"
+              >
+              <span class="checkmark"></span>
+              Usuario Activo
+            </label>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="btn btn-primary" [disabled]="editUserForm.invalid || isLoading">
+              <span *ngIf="isLoading" class="spinner-small"></span>
+              Actualizar Usuario
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de éxito -->
+  <div class="modal-overlay success-modal-overlay" *ngIf="showSuccessModal" (click)="closeSuccessModal()">
+    <div class="modal-content success-modal-content" (click)="$event.stopPropagation()">
+      <div class="success-modal-header">
+        <div class="success-icon">✓</div>
+        <h2>¡Éxito!</h2>
+      </div>
+      <div class="success-modal-body">
+        <p>{{ successMessage }}</p>
+      </div>
+      <div class="success-modal-actions">
+        <button class="success-ok-btn" (click)="closeSuccessModal()">Aceptar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de error -->
+  <div class="modal-overlay error-modal-overlay" *ngIf="showErrorModal" (click)="closeErrorModal()">
+    <div class="modal-content error-modal-content" (click)="$event.stopPropagation()">
+      <div class="error-modal-header">
+        <div class="error-icon">✗</div>
+        <h2>Error</h2>
+      </div>
+      <div class="error-modal-body">
+        <p>{{ errorMessage }}</p>
+      </div>
+      <div class="error-modal-actions">
+        <button class="error-ok-btn" (click)="closeErrorModal()">Aceptar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de confirmación -->
+  <div class="modal-overlay confirm-modal-overlay" *ngIf="showConfirmModal" (click)="closeConfirmModal()">
+    <div class="modal-content confirm-modal-content" (click)="$event.stopPropagation()">
+      <div class="confirm-modal-header">
+        <h2>{{ confirmTitle }}</h2>
+        <button class="close-btn" (click)="closeConfirmModal()">×</button>
+      </div>
+      <div class="confirm-modal-body">
+        <p>{{ confirmMessage }}</p>
+      </div>
+      <div class="confirm-modal-actions">
+        <button class="cancel-btn" (click)="closeConfirmModal()">Cancelar</button>
+        <button class="confirm-btn" (click)="confirmActionExecute()" [disabled]="isLoading">
+          <span *ngIf="!isLoading">Aceptar</span>
+          <span *ngIf="isLoading">Procesando...</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+</div>

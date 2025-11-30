@@ -1,0 +1,286 @@
+<div class="new-ticket-container">
+  <!-- Mensaje cuando hay tickets pendientes -->
+  <div class="pending-tickets-warning" *ngIf="hasPendingTickets && !isCheckingPendingTickets">
+    <div class="warning-content">
+      <span class="warning-icon">⚠️</span>
+      <div class="warning-text">
+        <strong>No puedes crear un nuevo ticket</strong>
+        <p>Tienes tickets pendientes de evaluación. Por favor, evalúa tus tickets en el menú "Cerrar Ticket" antes de crear uno nuevo.</p>
+      </div>
+      <button class="view-tickets-btn" (click)="goToCloseTickets()">Ir a Cerrar Ticket</button>
+    </div>
+  </div>
+
+  <!-- Mensaje de carga mientras se verifica -->
+  <div class="checking-pending-message" *ngIf="isCheckingPendingTickets">
+    <div class="checking-content">
+      <div class="loading-spinner-small"></div>
+      <span>Verificando tickets pendientes...</span>
+    </div>
+  </div>
+
+  <form [formGroup]="ticketForm" (ngSubmit)="onSubmit()" class="ticket-form" [class.disabled]="hasPendingTickets || isCheckingPendingTickets">
+    <!-- EMAIL -->
+    <div class="form-group">
+      <label for="email">EMAIL</label>
+      <input
+        id="email"
+        type="email"
+        formControlName="email"
+        readonly
+        class="form-control"
+      >
+    </div>
+
+    <hr class="form-divider">
+
+    <!-- Departamento -->
+    <div class="form-group">
+      <label for="departamento">Departamento</label>
+      <input
+        id="departamento"
+        type="text"
+        formControlName="departamento"
+        readonly
+        class="form-control"
+      >
+    </div>
+
+    <!-- Categoría -->
+    <div class="form-group">
+      <label for="categoria">Categoría</label>
+      <select
+        id="categoria"
+        formControlName="categoria"
+        class="form-control"
+        [class.error]="categoria?.invalid && categoria?.touched"
+        [disabled]="hasPendingTickets || isCheckingPendingTickets"
+        (change)="onCategoryChange()"
+      >
+        <option value="">Seleccionar categoría</option>
+        <option *ngFor="let cat of categories" [value]="cat">{{ cat }}</option>
+      </select>
+      <div *ngIf="categoria?.invalid && categoria?.touched" class="error-message">
+        *Este campo es obligatorio
+      </div>
+    </div>
+
+    <!-- Subcategoría -->
+    <div class="form-group">
+      <label for="subcategoria">Subcategoría</label>
+      <select
+        id="subcategoria"
+        formControlName="subcategoria"
+        class="form-control"
+        [class.error]="subcategoria?.invalid && subcategoria?.touched"
+        [disabled]="hasPendingTickets || isCheckingPendingTickets"
+        (change)="onSubcategoryChange()"
+      >
+        <option value="">Seleccionar subcategoría</option>
+        <option *ngFor="let subcat of subcategories" [value]="subcat">{{ subcat }}</option>
+      </select>
+      <div *ngIf="subcategoria?.invalid && subcategoria?.touched" class="error-message">
+        *Este campo es obligatorio
+      </div>
+    </div>
+
+    <!-- Descripción -->
+    <div class="form-group">
+      <label for="descripcion">Descripción*</label>
+      <textarea
+        id="descripcion"
+        formControlName="descripcion"
+        placeholder="Describe detalladamente tu solicitud (mínimo 10 caracteres)..."
+        class="form-control textarea"
+        [class.error]="descripcion?.invalid && (descripcion?.touched || descripcion?.dirty)"
+        [disabled]="hasPendingTickets || isCheckingPendingTickets"
+        rows="4"
+      ></textarea>
+      <div class="description-helpers">
+        <div *ngIf="descripcion?.invalid && (descripcion?.touched || descripcion?.dirty)" class="error-message">
+          <span *ngIf="descripcion?.errors?.['required']">*Este campo es obligatorio</span>
+          <span *ngIf="descripcion?.errors?.['minlength'] && !descripcion?.errors?.['required']">
+            *La descripción debe tener al menos 10 caracteres (actualmente: {{ descripcion?.value?.length || 0 }})
+          </span>
+        </div>
+        <div class="character-count" [class.warning]="(descripcion?.value?.length || 0) < 10 && descripcion?.dirty" [class.valid]="(descripcion?.value?.length || 0) >= 10">
+          {{ descripcion?.value?.length || 0 }} / 10 caracteres mínimo
+        </div>
+      </div>
+    </div>
+
+
+    <!-- Adjuntar carta de aprobación -->
+    <div class="form-group" *ngIf="requiereAprobacion">
+      <label for="archivoAprobacion">Adjuntar carta de aprobación *</label>
+
+      <!-- Área de subida de archivo -->
+      <div class="file-upload-container" *ngIf="!selectedFile">
+        <input
+          type="file"
+          id="archivoAprobacion"
+          (change)="onFileSelected($event)"
+          accept=".pdf"
+          class="file-input"
+          [class.error]="archivoAprobacion?.invalid && archivoAprobacion?.touched"
+          [disabled]="hasPendingTickets || isCheckingPendingTickets"
+        >
+        <label for="archivoAprobacion" class="file-upload-label">
+          <i class="fas fa-cloud-upload-alt"></i>
+          <span>Adjuntar carta de aprobación (Solo PDF) *</span>
+        </label>
+      </div>
+
+      <!-- Cuadro de carga mientras se procesa el archivo -->
+      <div class="file-loading-container" *ngIf="isProcessingFile">
+        <div class="loading-spinner"></div>
+        <p>Procesando archivo...</p>
+      </div>
+
+      <!-- Archivo seleccionado - permite revisar -->
+      <div class="file-selected-container" *ngIf="selectedFile && !isProcessingFile">
+        <div class="file-info">
+          <div class="file-icon">
+            <i class="fas fa-file-pdf"></i>
+          </div>
+          <div class="file-details">
+            <div class="file-name">{{ selectedFile.name }}</div>
+            <div class="file-size">{{ formatFileSize(selectedFile.size) }}</div>
+          </div>
+          <div class="file-actions">
+            <button type="button" class="btn-preview" (click)="previewFile()" title="Vista previa (Solo lectura)">
+              <i class="fas fa-eye"></i>
+              <span class="btn-text">Ver</span>
+            </button>
+            <button type="button" class="btn-remove" (click)="removeFile()" title="Eliminar archivo">
+              <i class="fas fa-trash"></i>
+              <span class="btn-text">Eliminar</span>
+            </button>
+          </div>
+        </div>
+        <div class="file-status">
+          <i class="fas fa-check-circle"></i>
+          <span>Archivo listo para enviar</span>
+        </div>
+      </div>
+
+      <!-- Mensajes de error -->
+      <div *ngIf="archivoAprobacion?.invalid && archivoAprobacion?.touched" class="error-message">
+        *Este campo es obligatorio para este tipo de servicio
+      </div>
+      <div *ngIf="fileError" class="error-message">
+        {{ fileError }}
+      </div>
+    </div>
+
+    <!-- Información adicional -->
+    <div class="info-box" *ngIf="requiereAprobacion">
+      <p>
+        <i class="fas fa-info-circle"></i>
+        Este servicio requiere carta de aprobación del jefe de área.
+        Por favor, adjunta el documento firmado en formato PDF para proceder con la solicitud.
+      </p>
+    </div>
+
+    <!-- Botón de envío -->
+    <div class="form-actions">
+      <button
+        type="submit"
+        class="submit-button"
+        [disabled]="ticketForm.invalid || isLoading || hasPendingTickets || isCheckingPendingTickets"
+      >
+        <span *ngIf="submissionStep === 'idle'">Enviar Ticket</span>
+        <span *ngIf="submissionStep === 'validating'">Validando...</span>
+        <span *ngIf="submissionStep === 'sending'">Enviando...</span>
+        <span *ngIf="submissionStep === 'assigning'">Asignando técnico...</span>
+        <span *ngIf="submissionStep === 'complete'">¡Completado!</span>
+      </button>
+    </div>
+  </form>
+
+  <!-- Modal de éxito -->
+  <div
+    class="modal-overlay"
+    *ngIf="showConfirmationModal"
+    (click)="cancelTicketSubmission()"
+  >
+    <div class="confirmation-modal" (click)="$event.stopPropagation()">
+      <h2>Confirmar datos del ticket</h2>
+      <p class="confirmation-subtitle">
+        Verifica que la información sea correcta antes de enviarla.
+      </p>
+
+      <div class="confirmation-details" *ngIf="confirmationData">
+        <div class="detail-item">
+          <span class="detail-label">Email</span>
+          <span class="detail-value">{{ confirmationData.email }}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Departamento</span>
+          <span class="detail-value">{{ confirmationData.departamento }}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Categoría</span>
+          <span class="detail-value">{{ confirmationData.categoria }}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Subcategoría</span>
+          <span class="detail-value">{{ confirmationData.subcategoria }}</span>
+        </div>
+        <div class="detail-item">
+          <span class="detail-label">Descripción</span>
+          <span class="detail-value description">{{ confirmationData.descripcion }}</span>
+        </div>
+        <div class="detail-item" *ngIf="confirmationData.requiereAprobacion">
+          <span class="detail-label">Carta de aprobación</span>
+          <span class="detail-value">
+            {{ confirmationData.archivoNombre || 'Sin archivo adjunto' }}
+          </span>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-secondary" (click)="cancelTicketSubmission()">
+          Revisar nuevamente
+        </button>
+        <button
+          type="button"
+          class="btn-primary"
+          (click)="confirmTicketSubmission()"
+        >
+          Confirmar y enviar
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" *ngIf="showSuccessModal" (click)="closeSuccessModal()">
+    <div class="success-modal" (click)="$event.stopPropagation()">
+      <h2 *ngIf="submissionStep === 'complete'">Tu ticket se registró con éxito</h2>
+      <h2 *ngIf="submissionStep !== 'complete'">Procesando tu ticket...</h2>
+
+      <div class="ticket-info-box">
+        <div class="ticket-id" *ngIf="submissionStep === 'complete' && ticketId">ID {{ ticketId }}</div>
+        <div class="ticket-id" *ngIf="submissionStep !== 'complete' || !ticketId">ID: {{ ticketId || 'Asignando...' }}</div>
+        <div class="ticket-description">{{ ticketDescription }}</div>
+        <div class="ticket-time">Tiempo estimado de respuesta: {{ estimatedTime || 'Calculando...' }}</div>
+        <div class="ticket-technician">
+          Técnico asignado:
+          <span *ngIf="submissionStep === 'complete' && tecnicoAsignado && tecnicoAsignado !== 'Asignando técnico...'">{{ tecnicoAsignado }}</span>
+          <span *ngIf="submissionStep !== 'complete' || !tecnicoAsignado || tecnicoAsignado === 'Asignando técnico...'" class="loading-text">{{ tecnicoAsignado || 'Asignando técnico...' }}</span>
+        </div>
+        <div class="ticket-email" *ngIf="submissionStep === 'complete'">Se envió un mensaje a tu correo</div>
+        <div class="loading-message" *ngIf="submissionStep !== 'complete'">
+          <div class="loading-spinner">
+            <i class="fas fa-spinner fa-spin"></i>
+          </div>
+          <p>Estamos procesando tu solicitud...</p>
+        </div>
+      </div>
+
+      <button class="ok-button" (click)="closeSuccessModal()" *ngIf="submissionStep === 'complete'">OK</button>
+    </div>
+
+  </div>
+
+</div>

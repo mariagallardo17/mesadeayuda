@@ -1,0 +1,1212 @@
+.new-ticket-container {
+  max-width: 800px;
+  margin: 0 auto;
+  padding: 3rem 2rem 2rem;
+  background-color: #f8f9fa;
+  min-height: 100vh;
+  overflow-x: hidden;
+  box-sizing: border-box;
+}
+
+.pending-tickets-warning {
+  background: #fff3cd;
+  border: 2px solid #ffc107;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.pending-tickets-warning .warning-content {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.pending-tickets-warning .warning-icon {
+  font-size: 2rem;
+  flex-shrink: 0;
+}
+
+.pending-tickets-warning .warning-text {
+  flex: 1;
+}
+
+.pending-tickets-warning .warning-text strong {
+  display: block;
+  color: #856404;
+  font-size: 1.1rem;
+  margin-bottom: 0.5rem;
+}
+
+.pending-tickets-warning .warning-text p {
+  margin: 0;
+  color: #856404;
+  font-size: 0.95rem;
+}
+
+.pending-tickets-warning .view-tickets-btn {
+  background: #6c5ce7;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 0.75rem 1.5rem;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background-color 0.3s;
+  white-space: nowrap;
+}
+
+.pending-tickets-warning .view-tickets-btn:hover {
+  background: #5941d8;
+}
+
+.checking-pending-message {
+  background: #e3f2fd;
+  border: 2px solid #2196f3;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.checking-pending-message .checking-content {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  justify-content: center;
+}
+
+.checking-pending-message .checking-content span {
+  color: #1976d2;
+  font-weight: 500;
+  font-size: 0.95rem;
+}
+
+.loading-spinner-small {
+  width: 20px;
+  height: 20px;
+  border: 3px solid #e3f2fd;
+  border-top: 3px solid #2196f3;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.ticket-form.disabled {
+  opacity: 0.6;
+  pointer-events: none;
+  position: relative;
+  user-select: none;
+}
+
+.ticket-form.disabled::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(255, 255, 255, 0.8);
+  z-index: 10;
+  border-radius: 12px;
+  cursor: not-allowed;
+}
+
+.ticket-form {
+  background-color: white;
+  padding: 2rem;
+  border-radius: 12px;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  position: relative;
+  overflow: visible;
+  box-sizing: border-box;
+}
+
+.form-group {
+  margin-bottom: 1.5rem;
+  position: relative;
+  overflow: visible;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 600;
+  color: #333;
+  font-size: 0.9rem;
+}
+
+.form-control {
+  width: 100%;
+  padding: 0.75rem;
+  border: 2px solid #e1e5e9;
+  border-radius: 8px;
+  font-size: 1rem;
+  transition: all 0.3s ease;
+  background-color: #fff;
+  box-sizing: border-box;
+  max-width: 100%;
+}
+
+.form-control select {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.form-control:focus {
+  outline: none;
+  border-color: #4A90E2;
+  box-shadow: 0 0 0 3px rgba(74, 144, 226, 0.1);
+}
+
+.form-control.error {
+  border-color: #dc3545;
+  box-shadow: 0 0 0 3px rgba(220, 53, 69, 0.1);
+}
+
+.form-control[readonly] {
+  background-color: #f8f9fa;
+  color: #6c757d;
+  cursor: not-allowed;
+}
+
+.textarea {
+  resize: vertical;
+  min-height: 100px;
+}
+
+.form-divider {
+  border: none;
+  height: 1px;
+  background-color: #e1e5e9;
+  margin: 1.5rem 0;
+}
+
+.file-upload-container {
+  position: relative;
+}
+
+.file-input {
+  position: absolute;
+  opacity: 0;
+  width: 100%;
+  height: 100%;
+  cursor: pointer;
+}
+
+.file-upload-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  border: 2px solid #e1e5e9;
+  border-radius: 8px;
+  background-color: #f8f9fa;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-size: 1rem;
+}
+
+.file-upload-label:hover {
+  border-color: #4A90E2;
+  background-color: #e3f2fd;
+}
+
+.file-upload-label i {
+  color: #4A90E2;
+  font-size: 1.2rem;
+}
+
+.error-message {
+  color: #dc3545;
+  font-size: 0.8rem;
+  margin-top: 0.25rem;
+  font-weight: 500;
+}
+
+.description-helpers {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-top: 0.5rem;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.character-count {
+  font-size: 0.75rem;
+  color: #6c757d;
+  font-weight: 500;
+  margin-top: 0.25rem;
+  transition: color 0.3s ease;
+}
+
+.character-count.warning {
+  color: #ffc107;
+  font-weight: 600;
+}
+
+.character-count.valid {
+  color: #28a745;
+  font-weight: 600;
+}
+
+.info-box {
+  background-color: #e3f2fd;
+  border: 1px solid #bbdefb;
+  border-radius: 8px;
+  padding: 1rem;
+  margin: 1.5rem 0;
+}
+
+.info-box p {
+  margin: 0;
+  color: #1565c0;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.form-actions {
+  text-align: center;
+  margin-top: 2rem;
+}
+
+.submit-button {
+  background-color: #4A90E2;
+  color: white;
+  border: none;
+  padding: 1rem 2rem;
+  border-radius: 8px;
+  font-size: 1.1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  min-width: 150px;
+}
+
+.submit-button:hover:not(:disabled) {
+  background-color: #357ABD;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(74, 144, 226, 0.3);
+}
+
+.submit-button:disabled {
+  background-color: #6c757d;
+  cursor: not-allowed;
+  transform: none;
+  box-shadow: none;
+}
+
+/* Responsive - Tablet (768px - 1024px) */
+@media (max-width: 1024px) {
+  .new-ticket-container {
+    padding: 1.5rem;
+  }
+
+  .ticket-form {
+    padding: 1.75rem;
+  }
+
+  .form-group {
+    margin-bottom: 1.25rem;
+  }
+}
+
+/* Responsive - Móvil (< 768px) */
+@media (max-width: 768px) {
+  .new-ticket-container {
+    padding: 1rem;
+  }
+
+  .ticket-form {
+    padding: 1.5rem;
+    border-radius: 10px;
+  }
+
+  .ticket-header h1 {
+    font-size: 1.5rem;
+  }
+
+  .form-group {
+    margin-bottom: 1.2rem;
+  }
+
+  .form-group label {
+    font-size: 0.85rem;
+  }
+
+  .form-control {
+    padding: 0.75rem;
+    font-size: 16px; /* Evitar zoom en iOS */
+  }
+
+  .textarea {
+    min-height: 90px;
+  }
+
+  .file-upload-label {
+    padding: 0.7rem;
+    font-size: 0.95rem;
+  }
+
+  .submit-button {
+    width: 100%;
+    padding: 0.875rem 1.5rem;
+    font-size: 1rem;
+  }
+
+  .modal-overlay {
+    padding: 15px;
+  }
+
+  .confirmation-modal,
+  .success-modal {
+    width: 95%;
+    max-width: 95vw;
+    padding: 1.5rem;
+  }
+
+  .modal-actions {
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .btn-secondary,
+  .btn-primary {
+    width: 100%;
+  }
+
+  .confirmation-details {
+    gap: 0.875rem;
+  }
+
+  .detail-item {
+    padding: 0.7rem;
+  }
+
+  .pdf-preview-content {
+    max-width: 95%;
+    width: 95%;
+    height: 500px;
+    padding: 15px;
+  }
+}
+
+/* Responsive - Móvil pequeño (< 480px) */
+@media (max-width: 480px) {
+  .new-ticket-container {
+    padding: 0.75rem;
+  }
+
+  .ticket-form {
+    padding: 1.25rem;
+    border-radius: 8px;
+  }
+
+  .ticket-header h1 {
+    font-size: 1.25rem;
+  }
+
+  .form-group {
+    margin-bottom: 1rem;
+  }
+
+  .form-group label {
+    font-size: 0.8rem;
+    margin-bottom: 0.4rem;
+  }
+
+  .form-control {
+    padding: 0.65rem;
+    font-size: 16px;
+    border-radius: 6px;
+  }
+
+  .textarea {
+    min-height: 80px;
+  }
+
+  .file-upload-label {
+    padding: 0.6rem;
+    font-size: 0.9rem;
+  }
+
+  .file-upload-label i {
+    font-size: 1.1rem;
+  }
+
+  .submit-button {
+    padding: 0.75rem 1.25rem;
+    font-size: 0.95rem;
+  }
+
+  .info-box {
+    padding: 0.875rem;
+  }
+
+  .info-box p {
+    font-size: 0.85rem;
+  }
+
+  .error-message {
+    font-size: 0.75rem;
+  }
+
+  .confirmation-modal,
+  .success-modal {
+    width: 98%;
+    max-width: 98vw;
+    padding: 1.25rem;
+  }
+
+  .confirmation-modal h2 {
+    font-size: 1.3rem;
+  }
+
+  .confirmation-subtitle {
+    font-size: 0.9rem;
+  }
+
+  .confirmation-details {
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+  }
+
+  .detail-item {
+    padding: 0.6rem;
+  }
+
+  .detail-label {
+    font-size: 0.8rem;
+  }
+
+  .detail-value {
+    font-size: 0.9rem;
+  }
+
+  .ticket-info-box {
+    padding: 1rem;
+  }
+
+  .ticket-id {
+    font-size: 1.1rem;
+  }
+
+  .ticket-description {
+    font-size: 0.9rem;
+  }
+
+  .ticket-time,
+  .ticket-technician,
+  .ticket-email {
+    font-size: 0.85rem;
+  }
+
+  .file-selected-container {
+    padding: 0.875rem;
+  }
+
+  .file-info {
+    flex-wrap: wrap;
+  }
+
+  .file-details {
+    min-width: 100%;
+    margin-bottom: 0.5rem;
+  }
+
+  .file-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .btn-preview,
+  .btn-remove {
+    flex: 1;
+  }
+
+  .pdf-preview-content {
+    max-width: 98%;
+    width: 98%;
+    height: 450px;
+    padding: 12px;
+  }
+
+  .pdf-preview-title {
+    font-size: 15px;
+    margin-bottom: 12px;
+  }
+}
+
+/* Modal de éxito */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1002;
+}
+
+.confirmation-modal {
+  background: white;
+  border-radius: 12px;
+  padding: 1.5rem;
+  max-width: 450px;
+  width: 90%;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  border: 2px solid #4A90E2;
+}
+
+.confirmation-modal h2 {
+  margin: 0 0 0.5rem;
+  color: #333;
+  font-size: 1.2rem;
+  font-weight: 700;
+  text-align: center;
+}
+
+.confirmation-subtitle {
+  margin: 0 0 1rem;
+  color: #555;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.confirmation-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1.5rem;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.6rem;
+  border-radius: 8px;
+  background-color: #f8f9fa;
+  border: 1px solid #e1e5e9;
+}
+
+.detail-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #4A90E2;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.detail-value {
+  font-size: 0.85rem;
+  color: #333;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.detail-value.description {
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.btn-secondary,
+.btn-primary {
+  border: none;
+  border-radius: 8px;
+  padding: 0.6rem 1.25rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.btn-secondary {
+  background-color: #e0e0e0;
+  color: #333;
+}
+
+.btn-secondary:hover {
+  background-color: #cacaca;
+}
+
+.btn-primary {
+  background-color: #4A90E2;
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background-color: #357ABD;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px rgba(74, 144, 226, 0.25);
+}
+
+.success-modal {
+  background: white;
+  border: 2px solid #4A90E2;
+  border-radius: 12px;
+  padding: 2rem;
+  text-align: center;
+  max-width: 500px;
+  width: 90%;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+  position: relative;
+}
+
+.success-modal h2 {
+  color: #333;
+  margin-bottom: 1.5rem;
+  font-size: 1.5rem;
+  font-weight: bold;
+}
+
+.ticket-info-box {
+  background: white;
+  border: 2px solid #4A90E2;
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+  text-align: center;
+}
+
+.ticket-id {
+  font-size: 1.25rem;
+  font-weight: bold;
+  color: #4A90E2;
+  margin-bottom: 0.5rem;
+}
+
+.ticket-description {
+  margin-bottom: 0.5rem;
+  color: #333;
+  font-weight: bold;
+}
+
+.ticket-time {
+  margin-bottom: 0.5rem;
+  color: #666;
+}
+
+.ticket-technician {
+  margin-bottom: 0.5rem;
+  color: #4A90E2;
+  font-weight: bold;
+}
+
+.ticket-email {
+  color: #666;
+  font-style: italic;
+}
+
+.ok-button {
+  background-color: #4A90E2;
+  color: white;
+  border: none;
+  padding: 0.75rem 2rem;
+  border-radius: 8px;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.3s ease;
+}
+
+.ok-button:hover {
+  background-color: #357ABD;
+}
+
+.loading-text {
+  color: #ffc107;
+  font-weight: bold;
+}
+
+.loading-message {
+  text-align: center;
+  margin-top: 15px;
+  padding: 15px;
+  background-color: #f8f9fa;
+  border-radius: 6px;
+  border-left: 4px solid #4A90E2;
+}
+
+.loading-message .loading-spinner {
+  margin-bottom: 10px;
+}
+
+.loading-message .loading-spinner i {
+  font-size: 24px;
+  color: #4A90E2;
+}
+
+.loading-message p {
+  margin: 0;
+  color: #666;
+  font-style: italic;
+}
+
+
+/* Estilos para el nuevo sistema de archivos PDF */
+.file-loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 2rem;
+  background: #f8f9fa;
+  border: 2px dashed #dee2e6;
+  border-radius: 8px;
+  margin-top: 1rem;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid #4A90E2;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+  margin-bottom: 1rem;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.file-loading-container p {
+  color: #666;
+  font-size: 0.9rem;
+  margin: 0;
+}
+
+.file-selected-container {
+  background: #f8f9fa;
+  border: 2px solid #28a745;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-top: 1rem;
+}
+
+.file-info {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.file-icon {
+  font-size: 2rem;
+  color: #dc3545;
+}
+
+.file-details {
+  flex: 1;
+}
+
+.file-name {
+  font-weight: bold;
+  color: #333;
+  margin-bottom: 0.25rem;
+  word-break: break-all;
+}
+
+.file-size {
+  font-size: 0.8rem;
+  color: #666;
+}
+
+.file-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.btn-preview, .btn-remove {
+  background: none;
+  border: none;
+  padding: 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 1rem;
+  transition: background-color 0.2s;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.25rem;
+  min-width: 60px;
+}
+
+.btn-text {
+  font-size: 0.7rem;
+  font-weight: bold;
+}
+
+.btn-preview {
+  color: #4A90E2;
+}
+
+.btn-preview:hover {
+  background-color: rgba(74, 144, 226, 0.1);
+}
+
+.btn-remove {
+  color: #dc3545;
+}
+
+.btn-remove:hover {
+  background-color: rgba(220, 53, 69, 0.1);
+}
+
+.file-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: #28a745;
+  font-size: 0.9rem;
+  font-weight: bold;
+}
+
+.file-status i {
+  font-size: 1rem;
+}
+
+/* Actualizar el label del file upload */
+.file-upload-label i {
+  color: #4A90E2;
+  margin-right: 0.5rem;
+}
+
+    /* Estilos para el modal de vista previa PDF */
+    .pdf-preview-modal {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.8);
+      z-index: 10000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    .pdf-preview-content {
+      background: white;
+      border-radius: 12px;
+      padding: 20px;
+      max-width: 90%;
+      max-height: 85%;
+      width: 800px;
+      height: 600px;
+      position: relative;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+      overflow: hidden;
+    }
+
+    .pdf-preview-close {
+      position: absolute;
+      top: 10px;
+      right: 15px;
+      background: #dc3545;
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 30px;
+      height: 30px;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: bold;
+      z-index: 10001;
+      transition: background-color 0.2s;
+    }
+
+    .pdf-preview-close:hover {
+      background: #c82333;
+    }
+
+
+    .pdf-preview-title {
+      margin: 0 0 15px 0;
+      color: #333;
+      font-size: 18px;
+      font-weight: bold;
+    }
+
+    .pdf-preview-iframe,
+    embed {
+      width: 100%;
+      height: calc(100% - 80px);
+      border: none;
+      border-radius: 8px;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    }
+
+    /* Responsive para el modal */
+    @media (max-width: 768px) {
+      .pdf-preview-content {
+        max-width: 95%;
+        max-height: 90%;
+        width: 95%;
+        height: 500px;
+        padding: 15px;
+      }
+
+      .pdf-preview-iframe,
+      embed {
+        height: calc(100% - 60px);
+      }
+
+      .pdf-preview-title {
+        font-size: 16px;
+      }
+    }
+
+/* Modal overlay para tickets pendientes */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-color: rgba(0, 0, 0, 0.5);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 2000; /* Arriba del header (z-index: 1100) */
+  padding: 1rem;
+}
+
+/* Modal de tickets pendientes de evaluación */
+.pending-tickets-modal {
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+  max-width: 600px;
+  width: 90%;
+  max-height: 90vh;
+  overflow-y: auto;
+  z-index: 2001;
+  position: relative;
+}
+
+.pending-tickets-modal .modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem;
+  border-bottom: 2px solid #e9ecef;
+  background: #fff3cd;
+}
+
+.pending-tickets-modal .modal-header h2 {
+  margin: 0;
+  color: #856404;
+  font-size: 1.25rem;
+}
+
+.pending-tickets-modal .close-button {
+  background: none;
+  border: none;
+  font-size: 28px;
+  cursor: pointer;
+  color: #856404;
+  padding: 0;
+  width: 30px;
+  height: 30px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  transition: background-color 0.2s;
+}
+
+.pending-tickets-modal .close-button:hover {
+  background-color: #ffeaa7;
+}
+
+.pending-tickets-modal .modal-body {
+  padding: 1.5rem;
+}
+
+.pending-tickets-modal .warning-box {
+  background: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.pending-tickets-modal .warning-box p {
+  margin: 0.5rem 0;
+  color: #856404;
+}
+
+.pending-tickets-modal .pending-tickets-list {
+  margin-bottom: 1.5rem;
+}
+
+.pending-tickets-modal .ticket-item {
+  background: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.pending-tickets-modal .ticket-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.pending-tickets-modal .ticket-id {
+  font-weight: bold;
+  color: #4A90E2;
+  font-size: 1.1rem;
+}
+
+.pending-tickets-modal .ticket-status {
+  padding: 0.25rem 0.75rem;
+  border-radius: 4px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  background: #28a745;
+  color: white;
+}
+
+.pending-tickets-modal .ticket-status.cerrado {
+  background: #6c757d;
+}
+
+.pending-tickets-modal .ticket-date {
+  color: #666;
+  font-size: 0.875rem;
+}
+
+.pending-tickets-modal .evaluate-btn {
+  background: #6c5ce7;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background-color 0.3s;
+  width: 100%;
+}
+
+.pending-tickets-modal .evaluate-btn:hover {
+  background: #5941d8;
+}
+
+.pending-tickets-modal .info-box {
+  background: #e7f3ff;
+  border: 1px solid #b3d9ff;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-top: 1rem;
+}
+
+.pending-tickets-modal .info-box p {
+  margin: 0.5rem 0;
+  color: #004085;
+  font-size: 0.9rem;
+}
+
+.pending-tickets-modal .modal-footer {
+  padding: 1rem 1.5rem;
+  border-top: 1px solid #e9ecef;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.pending-tickets-modal .btn-primary {
+  background: #4A90E2;
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 0.75rem 1.5rem;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background-color 0.3s;
+}
+
+.pending-tickets-modal .btn-primary:hover {
+  background: #357ABD;
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .new-ticket-container {
+    padding: 1.5rem 1rem;
+    max-width: 100%;
+  }
+
+  .ticket-form {
+    padding: 1.5rem;
+  }
+
+  .form-control {
+    font-size: 16px; /* Evita zoom en iOS */
+  }
+
+  .modal-overlay {
+    flex-direction: column;
+  }
+
+  .modal-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .btn-secondary,
+  .btn-primary {
+    width: 100%;
+  }
+
+  .pending-tickets-modal {
+    width: 95%;
+    max-height: 95vh;
+  }
+
+  .pending-tickets-modal .modal-header {
+    padding: 1rem;
+  }
+
+  .pending-tickets-modal .modal-header h2 {
+    font-size: 1.1rem;
+  }
+
+  .pending-tickets-modal .modal-body {
+    padding: 1rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .new-ticket-container {
+    padding: 1rem 0.75rem;
+  }
+
+  .ticket-form {
+    padding: 1rem;
+  }
+}
+

@@ -1,0 +1,21 @@
+<div class="countdown-container" [ngClass]="getSizeClass()" *ngIf="countdownInfo">
+  <div class="countdown-wrapper" [ngClass]="getStatusClass()">
+    <div class="countdown-icon" *ngIf="countdownInfo?.status === 'expired'">⚠️</div>
+    <div class="countdown-icon" *ngIf="countdownInfo?.status === 'warning'">⏰</div>
+    <div class="countdown-icon" *ngIf="countdownInfo?.status === 'normal'">⏱️</div>
+
+    <div class="countdown-content">
+      <div class="countdown-time" *ngIf="!countdownInfo?.isExpired">
+        {{ countdownInfo.displayText }}
+      </div>
+      <div class="countdown-expired" *ngIf="countdownInfo?.isExpired">
+        {{ countdownInfo.displayText }}
+      </div>
+
+      <div class="countdown-label" *ngIf="showLabel">
+        <span *ngIf="ticketStatus !== 'Finalizado' && !countdownInfo?.isExpired">Tiempo restante</span>
+        <span *ngIf="ticketStatus === 'Finalizado' || countdownInfo?.isExpired">Estado</span>
+      </div>
+    </div>
+  </div>
+</div>
