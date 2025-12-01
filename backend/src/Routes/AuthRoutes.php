@@ -42,7 +42,8 @@ class AuthRoutes
             AuthMiddleware::sendError('Email y contraseña son requeridos', 400);
         }
         
-        if (strlen($password) < 3) {
+        // Basic password length check (actual password requirements enforced during registration/change)
+        if (strlen($password) < 7) {
             AuthMiddleware::sendError('Credenciales inválidas', 401);
         }
         

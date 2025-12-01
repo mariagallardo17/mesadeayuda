@@ -16,7 +16,7 @@ class Database
         $port = $_ENV['DB_PORT'] ?? '3306';
         $dbname = $_ENV['DB_NAME'] ?? 'mesadeayuda';
         $username = $_ENV['DB_USER'] ?? 'root';
-        $password = $_ENV['DB_PASSWORD'] ?? 'carmen12';
+        $password = $_ENV['DB_PASSWORD'] ?? '';
         
         try {
             error_log("🔍 Intentando conectar a la base de datos...");

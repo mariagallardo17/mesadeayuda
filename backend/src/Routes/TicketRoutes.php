@@ -10,6 +10,8 @@ class TicketRoutes
     private $router;
     private $db;
     
+    const MIN_DESCRIPTION_LENGTH = 10;
+    
     public function __construct($router)
     {
         $this->router = $router;
@@ -133,8 +135,8 @@ class TicketRoutes
             AuthMiddleware::sendError('Todos los campos obligatorios deben ser completados', 400);
         }
         
-        if (strlen($descripcion) < 10) {
-            AuthMiddleware::sendError('La descripción debe tener al menos 10 caracteres', 400);
+        if (strlen($descripcion) < self::MIN_DESCRIPTION_LENGTH) {
+            AuthMiddleware::sendError('La descripción debe tener al menos ' . self::MIN_DESCRIPTION_LENGTH . ' caracteres', 400);
         }
         
         try {

@@ -17,17 +17,16 @@ class EmailService
         $this->mailer->isSMTP();
         $this->mailer->Host = $_ENV['SMTP_HOST'] ?? 'smtp.gmail.com';
         $this->mailer->SMTPAuth = true;
-        $this->mailer->Username = $_ENV['SMTP_USER'] ?? 'mesadeayuda042@gmail.com';
-        $this->mailer->Password = $_ENV['SMTP_PASS'] ?? 'ragr ftjy xgrv nmak';
+        $this->mailer->Username = $_ENV['SMTP_USER'] ?? '';
+        $this->mailer->Password = $_ENV['SMTP_PASS'] ?? '';
         $this->mailer->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
         $this->mailer->Port = $_ENV['SMTP_PORT'] ?? 587;
         $this->mailer->CharSet = 'UTF-8';
         
         // Default sender
-        $this->mailer->setFrom(
-            $_ENV['SMTP_USER'] ?? 'mesadeayuda042@gmail.com',
-            'Mesa de Ayuda - ITS'
-        );
+        if (!empty($_ENV['SMTP_USER'])) {
+            $this->mailer->setFrom($_ENV['SMTP_USER'], 'Mesa de Ayuda - ITS');
+        }
     }
     
     public function sendEmail($to, $subject, $htmlBody)
