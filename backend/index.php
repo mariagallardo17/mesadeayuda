@@ -1,4 +1,21 @@
 <?php
+// Check if Composer dependencies are installed
+if (!file_exists(__DIR__ . '/vendor/autoload.php')) {
+    http_response_code(500);
+    header('Content-Type: application/json');
+    echo json_encode([
+        'error' => 'Dependencies not installed',
+        'message' => 'Please run "composer install" in the backend directory to install PHP dependencies.',
+        'instructions' => [
+            '1. Install Composer from https://getcomposer.org/',
+            '2. Run: cd backend',
+            '3. Run: composer install',
+            '4. Reload this page'
+        ]
+    ]);
+    exit(1);
+}
+
 require_once __DIR__ . '/vendor/autoload.php';
 
 use App\Config\Database;
