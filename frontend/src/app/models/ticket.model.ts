@@ -4,7 +4,10 @@ export interface Ticket {
   categoria: string;
   subcategoria: string;
   descripcion: string;
-  tiempoEstimado: string;
+  tiempoEstimado: string; // Usa tiempo_maximo si existe, sino tiempo_objetivo
+  tiempoObjetivo?: string; // Tiempo objetivo original del servicio
+  tiempoMaximo?: string; // Tiempo máximo del servicio
+  tiempoRestanteFinalizacion?: number | null; // Tiempo restante en segundos (calculado en backend)
   estado: string;
   prioridad: string;
   fechaCreacion: string;
@@ -56,6 +59,7 @@ export interface Ticket {
   evaluacionCierreAutomatico?: boolean;
   tecnico?: any;
   servicio?: any;
+  enTiempo?: boolean | null; // true si fue resuelto en tiempo, false si fue tardío, null si no aplica
 }
 
 export interface Evaluation {

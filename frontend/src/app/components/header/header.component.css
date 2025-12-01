@@ -112,6 +112,11 @@
   z-index: 1001;
 }
 
+/* User Profile Container */
+.user-profile-container {
+  position: relative;
+}
+
 /* User Profile */
 .user-profile {
   display: flex;
@@ -130,6 +135,7 @@
 .user-profile.active {
   background: rgba(255, 255, 255, 0.2);
   transform: translateY(-1px);
+  border-radius: 12px 12px 0 0; /* Redondear solo arriba cuando está activo */
 }
 
 .user-avatar {
@@ -168,83 +174,103 @@
   letter-spacing: 0.5px;
 }
 
-/* User Menu Dropdown */
+/* User Menu Dropdown - Dentro del mismo contenedor */
 .user-menu {
   position: absolute;
   top: 100%;
   right: 0;
-  margin-top: 8px;
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
-  min-width: 280px;
+  left: 0;
+  background: rgba(255, 255, 255, 0.2); /* Mismo fondo que el perfil */
+  border-radius: 0 0 12px 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 8px rgba(0, 0, 0, 0.08);
   z-index: 1001;
-  animation: slideDown 0.2s ease-out;
+  animation: slideDownFade 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-top: none;
+  overflow: hidden;
+  padding: 8px;
+  backdrop-filter: blur(10px); /* Efecto de vidrio */
 }
 
-@keyframes slideDown {
+@keyframes slideDownFade {
   from {
     opacity: 0;
-    transform: translateY(-10px);
+    transform: translateY(-8px) scale(0.96);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
   }
 }
 
-.user-menu-content {
-  padding: 20px;
-}
+/* El botón ahora está directamente en .user-menu */
 
-.menu-user-info {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid #e2e8f0;
-  margin-bottom: 16px;
-}
-
-.menu-user-avatar {
-  width: 50px;
-  height: 50px;
-  background: linear-gradient(135deg, #4299e1 0%, #3182ce 100%);
-  border-radius: 50%;
+.menu-logout-btn {
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 10px;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, #dc2626 0%, #b91c1c 100%);
   color: white;
-  font-weight: 600;
-  font-size: 18px;
-  box-shadow: 0 4px 12px rgba(66, 153, 225, 0.3);
-}
-
-.menu-user-details {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.menu-user-name {
-  font-size: 16px;
-  font-weight: 600;
-  color: #2d3748;
-  line-height: 1.3;
-}
-
-.menu-user-role {
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
   font-size: 13px;
-  color: #718096;
-  font-weight: 500;
+  font-weight: 600;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: 0 2px 4px rgba(220, 38, 38, 0.2);
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  position: relative;
+  overflow: hidden;
 }
 
-.menu-actions {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+.menu-logout-btn::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -100%;
+  width: 100%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.2), transparent);
+  transition: left 0.5s;
+}
+
+.menu-logout-btn:hover::before {
+  left: 100%;
+}
+
+.menu-logout-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(220, 38, 38, 0.35);
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+}
+
+.menu-logout-btn:active {
+  transform: translateY(0);
+  box-shadow: 0 2px 4px rgba(220, 38, 38, 0.2);
+}
+
+.menu-logout-btn:active {
+  transform: translateY(0);
+}
+
+.logout-icon {
+  font-size: 18px;
+  /* Icono de tres bloques verticales */
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23ffffff'%3E%3Cpath d='M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z'/%3E%3C/svg%3E");
+  background-size: contain;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.logout-text {
+  font-weight: 600;
 }
 
 .menu-action {
