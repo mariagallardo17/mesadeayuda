@@ -99,6 +99,8 @@ export class CountdownComponent implements OnInit, OnDestroy, OnChanges {
           this.targetTime
         ).subscribe(info => {
           this.countdownInfo = info;
+          // Forzar detección de cambios para OnPush
+          this.cdr.markForCheck();
         });
       }
     }

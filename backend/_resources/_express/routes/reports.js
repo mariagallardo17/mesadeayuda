@@ -230,7 +230,7 @@ async function getReportesSummary(fechaInicio, fechaFin) {
       }
     }, 0);
 
-    // 7. Número de tickets finalizados fuera de tiempo (comparar con tiempo_objetivo del servicio)
+    // 7. Número de tickets finalizados fuera de tiempo (comparar con tiempo_objetivo del servicio en minutos)
     const ticketsTardios = await safeQuery(async () => {
       let ticketsTardiosQuery, ticketsTardiosParams;
 
@@ -241,7 +241,17 @@ async function getReportesSummary(fechaInicio, fechaFin) {
           WHERE t.fecha_cierre IS NOT NULL
           AND CAST(t.fecha_cierre AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
           AND t.estatus IN ('Finalizado', 'Cerrado')
-          AND TIMESTAMPDIFF(HOUR, t.fecha_creacion, COALESCE(t.fecha_cierre, t.fecha_finalizacion)) > s.tiempo_objetivo`;
+          AND s.tiempo_objetivo IS NOT NULL
+          AND (
+            (s.tiempo_objetivo LIKE '%días%' OR s.tiempo_objetivo LIKE '%dias%' OR s.tiempo_objetivo LIKE '%día%' OR s.tiempo_objetivo LIKE '%dia%')
+            AND TIMESTAMPDIFF(MINUTE, t.fecha_creacion, t.fecha_cierre) > (CAST(SUBSTRING_INDEX(s.tiempo_objetivo, ' ', 1) AS UNSIGNED) * 24 * 60)
+            OR
+            (s.tiempo_objetivo LIKE '%:%')
+            AND TIMESTAMPDIFF(MINUTE, t.fecha_creacion, t.fecha_cierre) > (TIME_TO_SEC(CAST(s.tiempo_objetivo AS TIME)) / 60)
+            OR
+            (CAST(s.tiempo_objetivo AS UNSIGNED) > 0)
+            AND TIMESTAMPDIFF(MINUTE, t.fecha_creacion, t.fecha_cierre) > CAST(s.tiempo_objetivo AS UNSIGNED)
+          )`;
         ticketsTardiosParams = [fechaInicio, fechaFin];
       } else {
         // Si no hay fechas, cargar TODOS los tickets tardíos
@@ -250,7 +260,17 @@ async function getReportesSummary(fechaInicio, fechaFin) {
           INNER JOIN Servicios s ON t.id_servicio = s.id_servicio
           WHERE t.fecha_cierre IS NOT NULL
           AND t.estatus IN ('Finalizado', 'Cerrado')
-          AND TIMESTAMPDIFF(HOUR, t.fecha_creacion, COALESCE(t.fecha_cierre, t.fecha_finalizacion)) > s.tiempo_objetivo`;
+          AND s.tiempo_objetivo IS NOT NULL
+          AND (
+            (s.tiempo_objetivo LIKE '%días%' OR s.tiempo_objetivo LIKE '%dias%' OR s.tiempo_objetivo LIKE '%día%' OR s.tiempo_objetivo LIKE '%dia%')
+            AND TIMESTAMPDIFF(MINUTE, t.fecha_creacion, t.fecha_cierre) > (CAST(SUBSTRING_INDEX(s.tiempo_objetivo, ' ', 1) AS UNSIGNED) * 24 * 60)
+            OR
+            (s.tiempo_objetivo LIKE '%:%')
+            AND TIMESTAMPDIFF(MINUTE, t.fecha_creacion, t.fecha_cierre) > (TIME_TO_SEC(CAST(s.tiempo_objetivo AS TIME)) / 60)
+            OR
+            (CAST(s.tiempo_objetivo AS UNSIGNED) > 0)
+            AND TIMESTAMPDIFF(MINUTE, t.fecha_creacion, t.fecha_cierre) > CAST(s.tiempo_objetivo AS UNSIGNED)
+          )`;
         ticketsTardiosParams = [];
       }
 
@@ -488,7 +508,7 @@ async function getReportesSummary(fechaInicio, fechaFin) {
       console.error('⚠️ Error calculando MTTA:', error.message);
     }
 
-    // 14. Cumplimiento de SLA técnico (% de tickets resueltos dentro del tiempo objetivo)
+    // 14. Cumplimiento de SLA técnico (% de tickets resueltos dentro del tiempo objetivo en minutos)
     let cumplimientoSLA = 0;
     try {
       let slaQuery, slaParams;
@@ -497,13 +517,24 @@ async function getReportesSummary(fechaInicio, fechaFin) {
           SELECT
             COUNT(*) as total,
             SUM(CASE
-              WHEN TIMESTAMPDIFF(HOUR, t.fecha_creacion, COALESCE(t.fecha_cierre, t.fecha_finalizacion)) <= s.tiempo_objetivo
+              WHEN s.tiempo_objetivo IS NOT NULL AND
+                  (
+                    (s.tiempo_objetivo LIKE '%días%' OR s.tiempo_objetivo LIKE '%dias%' OR s.tiempo_objetivo LIKE '%día%' OR s.tiempo_objetivo LIKE '%dia%')
+                    AND TIMESTAMPDIFF(MINUTE, t.fecha_creacion, t.fecha_cierre) <= (CAST(SUBSTRING_INDEX(s.tiempo_objetivo, ' ', 1) AS UNSIGNED) * 24 * 60)
+                    OR
+                    (s.tiempo_objetivo LIKE '%:%')
+                    AND TIMESTAMPDIFF(MINUTE, t.fecha_creacion, t.fecha_cierre) <= (TIME_TO_SEC(CAST(s.tiempo_objetivo AS TIME)) / 60)
+                    OR
+                    (CAST(s.tiempo_objetivo AS UNSIGNED) > 0)
+                    AND TIMESTAMPDIFF(MINUTE, t.fecha_creacion, t.fecha_cierre) <= CAST(s.tiempo_objetivo AS UNSIGNED)
+                  )
               THEN 1 ELSE 0
             END) as cumplidos
           FROM Tickets t
           INNER JOIN Servicios s ON t.id_servicio = s.id_servicio
           WHERE t.estatus IN ('Finalizado', 'Cerrado')
           AND t.fecha_cierre IS NOT NULL
+          AND s.tiempo_objetivo IS NOT NULL
           AND CAST(t.fecha_cierre AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
         `;
         slaParams = [fechaInicio, fechaFin];
@@ -513,13 +544,24 @@ async function getReportesSummary(fechaInicio, fechaFin) {
           SELECT
             COUNT(*) as total,
             SUM(CASE
-              WHEN TIMESTAMPDIFF(HOUR, t.fecha_creacion, COALESCE(t.fecha_cierre, t.fecha_finalizacion)) <= s.tiempo_objetivo
+              WHEN s.tiempo_objetivo IS NOT NULL AND
+                  (
+                    (s.tiempo_objetivo LIKE '%días%' OR s.tiempo_objetivo LIKE '%dias%' OR s.tiempo_objetivo LIKE '%día%' OR s.tiempo_objetivo LIKE '%dia%')
+                    AND TIMESTAMPDIFF(MINUTE, t.fecha_creacion, t.fecha_cierre) <= (CAST(SUBSTRING_INDEX(s.tiempo_objetivo, ' ', 1) AS UNSIGNED) * 24 * 60)
+                    OR
+                    (s.tiempo_objetivo LIKE '%:%')
+                    AND TIMESTAMPDIFF(MINUTE, t.fecha_creacion, t.fecha_cierre) <= (TIME_TO_SEC(CAST(s.tiempo_objetivo AS TIME)) / 60)
+                    OR
+                    (CAST(s.tiempo_objetivo AS UNSIGNED) > 0)
+                    AND TIMESTAMPDIFF(MINUTE, t.fecha_creacion, t.fecha_cierre) <= CAST(s.tiempo_objetivo AS UNSIGNED)
+                  )
               THEN 1 ELSE 0
             END) as cumplidos
           FROM Tickets t
           INNER JOIN Servicios s ON t.id_servicio = s.id_servicio
           WHERE t.estatus IN ('Finalizado', 'Cerrado')
           AND t.fecha_cierre IS NOT NULL
+          AND s.tiempo_objetivo IS NOT NULL
         `;
         slaParams = [];
       }

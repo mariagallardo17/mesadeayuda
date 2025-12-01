@@ -102,9 +102,22 @@ export class AssignedTicketsComponent implements OnInit, OnDestroy {
     });
 
     // Si el ticket está pendiente, cambiarlo automáticamente a "En Progreso"
+    // Solo si el técnico asignado abre el ticket
     const tienePendienteManual = !!ticket.pendienteMotivo;
-    if (ticket.estado === 'Pendiente' && !tienePendienteManual) {
+    const currentUser = this.authService.getCurrentUser();
+    const esTecnicoOAdmin = currentUser?.rol === 'tecnico' || currentUser?.rol === 'administrador';
+    
+    // En assigned-tickets, todos los tickets ya están asignados al técnico actual
+    // Por lo tanto, si es técnico/admin y el ticket está pendiente, cambiar automáticamente
+    if (esTecnicoOAdmin && ticket.estado === 'Pendiente' && !tienePendienteManual) {
+      console.log('✅ Técnico abriendo ticket asignado - Cambiando estado automáticamente a En Progreso');
       this.cambiarEstadoAutomatico(ticket, 'En Progreso');
+    } else {
+      console.log('ℹ️ No se cambia el estado automáticamente:', {
+        esTecnicoOAdmin,
+        estado: ticket.estado,
+        tienePendienteManual
+      });
     }
   }
 

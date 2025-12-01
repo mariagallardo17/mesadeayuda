@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const newAssignmentService = require('../services/newAssignmentService');
 const notificationOrchestrator = require('../services/notification-orchestrator');
+const { sqlCalcularEnTiempo, calcularEnTiempo, calcularTiempoRestanteFinalizacion } = require('../utils/tiempoHelper');
 
 const router = express.Router();
 
@@ -328,7 +329,7 @@ router.post('/', authenticateToken, upload.single('archivoAprobacion'), async (r
 
     // Obtener servicio del catálogo para obtener tiempo estimado y si requiere aprobación
     const servicios = await query(`
-      SELECT id_servicio, tiempo_objetivo, requiere_aprobacion, prioridad, estatus
+      SELECT id_servicio, tiempo_objetivo, tiempo_maximo, requiere_aprobacion, prioridad, estatus
       FROM Servicios
       WHERE categoria = ? AND subcategoria = ? AND estatus = 'Activo'
     `, [categoriaTrim, subcategoriaTrim]);
@@ -339,6 +340,7 @@ router.post('/', authenticateToken, upload.single('archivoAprobacion'), async (r
 
     const servicio = servicios[0];
     const tiempoEstimado = servicio.tiempo_objetivo;
+    const tiempoMaximo = servicio.tiempo_maximo;
     // Manejar requiere_aprobacion como TINYINT(1) - puede ser 0, 1, true, false
     const requiereAprobacion = servicio.requiere_aprobacion === 1 || servicio.requiere_aprobacion === true || servicio.requiere_aprobacion === '1';
 
@@ -463,6 +465,27 @@ router.post('/', authenticateToken, upload.single('archivoAprobacion'), async (r
     // Asegurar que la prioridad esté mapeada correctamente antes de insertar
     const prioridadFinal = mapearPrioridadAEnum(prioridad || 'Media');
 
+    // Calcular tiempo_restante_finalizacion basado en tiempo_objetivo o tiempo_maximo del servicio
+    const fechaCreacion = new Date();
+    let tiempoRestanteFinalizacion = null;
+    
+    try {
+      tiempoRestanteFinalizacion = calcularTiempoRestanteFinalizacion(
+        fechaCreacion,
+        servicio.tiempo_objetivo,
+        servicio.tiempo_maximo
+      );
+    } catch (error) {
+      console.error('⚠️ Error calculando tiempo_restante_finalizacion:', error);
+      console.error('⚠️ Continuando sin tiempo_restante_finalizacion');
+      tiempoRestanteFinalizacion = null;
+    }
+
+    console.log('⏱️ Tiempo de solución calculado:');
+    console.log(`   Tiempo objetivo: ${servicio.tiempo_objetivo || 'N/A'}`);
+    console.log(`   Tiempo máximo: ${servicio.tiempo_maximo || 'N/A'}`);
+    console.log(`   Tiempo restante (segundos): ${tiempoRestanteFinalizacion !== null ? tiempoRestanteFinalizacion : 'N/A'}`);
+
     const parametros = [
       req.user.id_usuario,
       servicio.id_servicio,
@@ -470,7 +493,8 @@ router.post('/', authenticateToken, upload.single('archivoAprobacion'), async (r
       prioridadFinal,
       'Pendiente',
       tecnicoAsignadoId || null,
-      archivoAprobacion ? archivoAprobacion.filename : null
+      archivoAprobacion ? archivoAprobacion.filename : null,
+      tiempoRestanteFinalizacion
     ];
 
     console.log('📊 Parámetros para inserción:', {
@@ -480,8 +504,10 @@ router.post('/', authenticateToken, upload.single('archivoAprobacion'), async (r
       'prioridad': prioridadFinal,
       'estatus': 'Pendiente',
       'tecnicoAsignadoId': tecnicoAsignadoId || null,
-      'archivoAprobacion': archivoAprobacion ? archivoAprobacion.filename : null
+      'archivoAprobacion': archivoAprobacion ? archivoAprobacion.filename : null,
+      'tiempoRestanteFinalizacion': tiempoRestanteFinalizacion
     });
+    console.log('📊 Array de parámetros completo:', parametros);
 
     if (tecnicoAsignadoId) {
       console.log(`✅ Insertando ticket CON técnico asignado (ID: ${tecnicoAsignadoId})`);
@@ -504,8 +530,9 @@ router.post('/', authenticateToken, upload.single('archivoAprobacion'), async (r
           id_tecnico,
           fecha_creacion,
           fecha_asignacion,
-          archivo_aprobacion
-        ) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), ?)
+          archivo_aprobacion,
+          tiempo_restante_finalizacion
+        ) VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW(), ?, ?)
       `;
     } else {
       sqlQuery = `
@@ -518,20 +545,24 @@ router.post('/', authenticateToken, upload.single('archivoAprobacion'), async (r
           id_tecnico,
           fecha_creacion,
           fecha_asignacion,
-          archivo_aprobacion
-        ) VALUES (?, ?, ?, ?, ?, ?, NOW(), NULL, ?)
+          archivo_aprobacion,
+          tiempo_restante_finalizacion
+        ) VALUES (?, ?, ?, ?, ?, ?, NOW(), NULL, ?, ?)
       `;
     }
 
     console.log('📝 Ejecutando consulta SQL de inserción...');
     console.log('📝 SQL Query:', sqlQuery.replace(/\s+/g, ' ').trim());
     console.log('📝 Parámetros:', parametros);
+    console.log('📝 Número de parámetros:', parametros.length);
+    console.log('📝 Número de placeholders en SQL:', (sqlQuery.match(/\?/g) || []).length);
 
     let result;
     try {
       result = await query(sqlQuery, parametros);
       console.log('✅ Consulta SQL ejecutada exitosamente');
       console.log('✅ Resultado:', result);
+      console.log('✅ Insert ID:', result.insertId);
     } catch (sqlError) {
       console.error('❌ ERROR en consulta SQL:', sqlError);
       console.error('❌ Mensaje SQL:', sqlError.message);
@@ -539,6 +570,7 @@ router.post('/', authenticateToken, upload.single('archivoAprobacion'), async (r
       console.error('❌ SQL State:', sqlError.sqlState);
       console.error('❌ SQL Query:', sqlQuery);
       console.error('❌ Parámetros:', parametros);
+      console.error('❌ Stack trace:', sqlError.stack);
       throw sqlError; // Re-lanzar el error para que sea capturado por el catch principal
     }
 
@@ -572,35 +604,78 @@ router.post('/', authenticateToken, upload.single('archivoAprobacion'), async (r
     }
 
     // Obtener el ticket creado con información del servicio y técnico asignado
-    const tickets = await query(`
-      SELECT
-        t.id_ticket,
-        t.descripcion,
-        t.prioridad,
-        t.estatus,
-        t.fecha_creacion,
-        t.fecha_cierre,
-        t.fecha_asignacion,
-        t.fecha_inicio_atencion,
-        t.tiempo_atencion_segundos,
-        t.pendiente_motivo,
-        t.pendiente_tiempo_estimado,
-        t.pendiente_actualizado_en,
-        t.id_usuario,
-        t.id_tecnico,
-        s.categoria,
-        s.subcategoria,
-        s.tiempo_objetivo,
-        u.nombre,
-        u.correo,
-        tec.nombre as tecnico_nombre,
-        tec.correo as tecnico_correo
-      FROM Tickets t
-      JOIN Servicios s ON t.id_servicio = s.id_servicio
-      JOIN Usuarios u ON t.id_usuario = u.id_usuario
-      LEFT JOIN Usuarios tec ON t.id_tecnico = tec.id_usuario
-      WHERE t.id_ticket = ?
-    `, [ticketId]);
+    let tickets;
+    try {
+      tickets = await query(`
+        SELECT
+          t.id_ticket,
+          t.descripcion,
+          t.prioridad,
+          t.estatus,
+          t.fecha_creacion,
+          t.fecha_cierre,
+          t.fecha_asignacion,
+          t.fecha_inicio_atencion,
+          t.tiempo_atencion_segundos,
+          t.tiempo_restante_finalizacion,
+          t.pendiente_motivo,
+          t.pendiente_tiempo_estimado,
+          t.pendiente_actualizado_en,
+          t.id_usuario,
+          t.id_tecnico,
+          s.categoria,
+          s.subcategoria,
+          s.tiempo_objetivo,
+          s.tiempo_maximo,
+          u.nombre,
+          u.correo,
+          tec.nombre as tecnico_nombre,
+          tec.correo as tecnico_correo,
+          ${sqlCalcularEnTiempo()}
+        FROM Tickets t
+        JOIN Servicios s ON t.id_servicio = s.id_servicio
+        JOIN Usuarios u ON t.id_usuario = u.id_usuario
+        LEFT JOIN Usuarios tec ON t.id_tecnico = tec.id_usuario
+        WHERE t.id_ticket = ?
+      `, [ticketId]);
+    } catch (queryError) {
+      console.error('❌ ERROR en consulta SELECT del ticket:', queryError);
+      console.error('❌ Mensaje:', queryError.message);
+      console.error('❌ Stack:', queryError.stack);
+      // Intentar obtener el ticket sin el cálculo de enTiempo como fallback
+      console.log('🔄 Intentando obtener ticket sin cálculo de enTiempo...');
+      tickets = await query(`
+        SELECT
+          t.id_ticket,
+          t.descripcion,
+          t.prioridad,
+          t.estatus,
+          t.fecha_creacion,
+          t.fecha_cierre,
+          t.fecha_asignacion,
+          t.fecha_inicio_atencion,
+          t.tiempo_atencion_segundos,
+          t.tiempo_restante_finalizacion,
+          t.pendiente_motivo,
+          t.pendiente_tiempo_estimado,
+          t.pendiente_actualizado_en,
+          t.id_usuario,
+          t.id_tecnico,
+          s.categoria,
+          s.subcategoria,
+          s.tiempo_objetivo,
+          s.tiempo_maximo,
+          u.nombre,
+          u.correo,
+          tec.nombre as tecnico_nombre,
+          tec.correo as tecnico_correo
+        FROM Tickets t
+        JOIN Servicios s ON t.id_servicio = s.id_servicio
+        JOIN Usuarios u ON t.id_usuario = u.id_usuario
+        LEFT JOIN Usuarios tec ON t.id_tecnico = tec.id_usuario
+        WHERE t.id_ticket = ?
+      `, [ticketId]);
+    }
 
     if (!tickets || tickets.length === 0) {
       console.error('❌ ERROR: No se pudo obtener el ticket recién creado');
@@ -609,12 +684,28 @@ router.post('/', authenticateToken, upload.single('archivoAprobacion'), async (r
     }
 
     const ticket = tickets[0];
+    // Calcular enTiempo si no viene del SQL (fallback)
+    // Para tickets recién creados, enTiempo siempre será null porque no tienen fecha_cierre
+    let enTiempo = null;
+    if (ticket.en_tiempo !== null && ticket.en_tiempo !== undefined) {
+      enTiempo = ticket.en_tiempo === 1;
+    } else if (ticket.fecha_cierre) {
+      // Solo calcular si hay fecha_cierre
+      enTiempo = calcularEnTiempo(ticket.fecha_creacion, ticket.fecha_cierre, ticket.tiempo_objetivo);
+    }
+
+    // Usar tiempo_maximo si está disponible, sino usar tiempo_objetivo para el countdown
+    const tiempoParaCountdown = ticket.tiempo_maximo || ticket.tiempo_objetivo;
+
     const formattedTicket = {
       id: ticket.id_ticket,
       categoria: ticket.categoria,
       subcategoria: ticket.subcategoria,
       descripcion: ticket.descripcion,
-      tiempoEstimado: ticket.tiempo_objetivo,
+      tiempoEstimado: tiempoParaCountdown, // Usar tiempo_maximo si existe, sino tiempo_objetivo
+      tiempoObjetivo: ticket.tiempo_objetivo, // Mantener tiempo_objetivo original
+      tiempoMaximo: ticket.tiempo_maximo,
+      tiempoRestanteFinalizacion: ticket.tiempo_restante_finalizacion, // Tiempo restante calculado en segundos
       estado: ticket.estatus,
       prioridad: ticket.prioridad,
       fechaCreacion: ticket.fecha_creacion,
@@ -625,6 +716,7 @@ router.post('/', authenticateToken, upload.single('archivoAprobacion'), async (r
       pendienteMotivo: ticket.pendiente_motivo || null,
       pendienteTiempoEstimado: ticket.pendiente_tiempo_estimado || null,
       pendienteActualizadoEn: ticket.pendiente_actualizado_en || null,
+      enTiempo: enTiempo,
       tecnicoAsignado: ticket.tecnico_nombre ? {
         nombre: ticket.tecnico_nombre,
         correo: ticket.tecnico_correo
@@ -713,6 +805,7 @@ router.get('/my-tickets', authenticateToken, async (req, res) => {
           s.subcategoria,
           t.descripcion,
           s.tiempo_objetivo as tiempo_estimado,
+          s.tiempo_maximo,
           t.estatus as estado,
           t.prioridad,
           t.fecha_creacion,
@@ -721,6 +814,7 @@ router.get('/my-tickets', authenticateToken, async (req, res) => {
           t.fecha_asignacion,
           t.fecha_inicio_atencion,
           t.tiempo_atencion_segundos,
+          t.tiempo_restante_finalizacion,
           t.archivo_aprobacion as archivoAprobacion,
           t.pendiente_motivo as pendienteMotivo,
           t.pendiente_tiempo_estimado as pendienteTiempoEstimado,
@@ -740,7 +834,8 @@ router.get('/my-tickets', authenticateToken, async (req, res) => {
           tr.causa_tecnico as reapertura_causa_tecnico,
           tr.fecha_reapertura as reapertura_fecha_reapertura,
           tr.fecha_respuesta_tecnico as reapertura_fecha_respuesta_tecnico,
-          tr.tecnico_id as reapertura_tecnico_id
+          tr.tecnico_id as reapertura_tecnico_id,
+          ${sqlCalcularEnTiempo()}
         FROM Tickets t
         JOIN Servicios s ON t.id_servicio = s.id_servicio
         JOIN Usuarios u ON t.id_usuario = u.id_usuario
@@ -755,9 +850,9 @@ router.get('/my-tickets', authenticateToken, async (req, res) => {
             GROUP BY id_ticket
           ) latest ON latest.id_ticket = tr.id_ticket AND latest.max_fecha = tr.fecha_reapertura
         ) tr ON tr.id_ticket = t.id_ticket
-        WHERE t.id_tecnico = ? AND t.estatus != 'Escalado'
+        WHERE (t.id_tecnico = ? OR t.id_usuario = ?) AND t.estatus != 'Escalado'
         ORDER BY t.fecha_creacion DESC
-      `, [req.user.id_usuario]);
+      `, [req.user.id_usuario, req.user.id_usuario]);
     } else {
       tickets = await query(`
         SELECT
@@ -766,6 +861,7 @@ router.get('/my-tickets', authenticateToken, async (req, res) => {
           s.subcategoria,
           t.descripcion,
           s.tiempo_objetivo as tiempo_estimado,
+          s.tiempo_maximo,
           t.estatus as estado,
           t.prioridad,
           t.fecha_creacion,
@@ -774,6 +870,7 @@ router.get('/my-tickets', authenticateToken, async (req, res) => {
           t.fecha_asignacion,
           t.fecha_inicio_atencion,
           t.tiempo_atencion_segundos,
+          t.tiempo_restante_finalizacion,
           t.archivo_aprobacion as archivoAprobacion,
           t.pendiente_motivo as pendienteMotivo,
           t.pendiente_tiempo_estimado as pendienteTiempoEstimado,
@@ -792,7 +889,8 @@ router.get('/my-tickets', authenticateToken, async (req, res) => {
           tr.causa_tecnico as reapertura_causa_tecnico,
           tr.fecha_reapertura as reapertura_fecha_reapertura,
           tr.fecha_respuesta_tecnico as reapertura_fecha_respuesta_tecnico,
-          tr.tecnico_id as reapertura_tecnico_id
+          tr.tecnico_id as reapertura_tecnico_id,
+          ${sqlCalcularEnTiempo()}
         FROM Tickets t
         JOIN Servicios s ON t.id_servicio = s.id_servicio
         JOIN Usuarios u ON t.id_usuario = u.id_usuario
@@ -815,47 +913,61 @@ router.get('/my-tickets', authenticateToken, async (req, res) => {
     console.log('📊 Tickets encontrados:', tickets.length);
     console.log('📋 Tickets:', tickets);
 
-    const formattedTickets = tickets.map(ticket => ({
-      id: ticket.id,
-      categoria: ticket.categoria,
-      subcategoria: ticket.subcategoria,
-      descripcion: ticket.descripcion,
-      tiempoEstimado: ticket.tiempo_estimado,
-      estado: ticket.estado,
-      prioridad: ticket.prioridad,
-      fechaCreacion: ticket.fecha_creacion,
-      fechaFinalizacion: ticket.fecha_finalizacion,
-      fechaCierre: ticket.fecha_cierre,
-      fechaAsignacion: ticket.fecha_asignacion,
-      fechaInicioAtencion: ticket.fecha_inicio_atencion,
-      tiempoAtencionSegundos: ticket.tiempo_atencion_segundos,
-      archivoAprobacion: ticket.archivoAprobacion,
-      pendienteMotivo: ticket.pendienteMotivo,
-      pendienteTiempoEstimado: ticket.pendienteTiempoEstimado,
-      pendienteActualizadoEn: ticket.pendienteActualizadoEn,
-      evaluacionUltimoRecordatorio: ticket.evaluacion_ultimo_recordatorio,
-      evaluacionRecordatorioContador: ticket.evaluacion_recordatorio_contador,
-      evaluacionCierreAutomatico: ticket.evaluacion_cierre_automatico === 1,
-      tecnicoAsignado: ticket.tecnico_nombre || null,
-      comentarioAdminTecnico: ticket.comentario_admin_tecnico || null,
-      evaluacion: ticket.calificacion ? {
-        calificacion: ticket.calificacion,
-        comentario: ticket.comentario_evaluacion,
-        fechaEvaluacion: ticket.fecha_evaluacion
-      } : null,
-      reapertura: ticket.reapertura_id ? {
-        id: ticket.reapertura_id,
-        observacionesUsuario: ticket.reapertura_observaciones_usuario,
-        causaTecnico: ticket.reapertura_causa_tecnico,
-        fechaReapertura: ticket.reapertura_fecha_reapertura,
-        fechaRespuestaTecnico: ticket.reapertura_fecha_respuesta_tecnico
-      } : null,
-      mostrarEstadoReabierto: !!ticket.reapertura_id,
-      usuario: {
-        nombre: ticket.usuario_nombre,
-        correo: ticket.usuario_correo
-      }
-    }));
+    const formattedTickets = tickets.map(ticket => {
+      // Calcular enTiempo si no viene del SQL (fallback)
+      const enTiempo = ticket.en_tiempo !== null && ticket.en_tiempo !== undefined 
+        ? ticket.en_tiempo === 1 
+        : calcularEnTiempo(ticket.fecha_creacion, ticket.fecha_cierre, ticket.tiempo_estimado);
+
+      // Usar tiempo_maximo si está disponible, sino usar tiempo_objetivo para el countdown
+      const tiempoParaCountdown = ticket.tiempo_maximo || ticket.tiempo_estimado;
+
+      return {
+        id: ticket.id,
+        categoria: ticket.categoria,
+        subcategoria: ticket.subcategoria,
+        descripcion: ticket.descripcion,
+        tiempoEstimado: tiempoParaCountdown, // Usar tiempo_maximo si existe, sino tiempo_objetivo
+        tiempoObjetivo: ticket.tiempo_estimado, // Mantener tiempo_objetivo original
+        tiempoMaximo: ticket.tiempo_maximo,
+        tiempoRestanteFinalizacion: ticket.tiempo_restante_finalizacion, // Tiempo restante calculado en segundos
+        estado: ticket.estado,
+        prioridad: ticket.prioridad,
+        fechaCreacion: ticket.fecha_creacion,
+        fechaFinalizacion: ticket.fecha_finalizacion,
+        fechaCierre: ticket.fecha_cierre,
+        fechaAsignacion: ticket.fecha_asignacion,
+        fechaInicioAtencion: ticket.fecha_inicio_atencion,
+        tiempoAtencionSegundos: ticket.tiempo_atencion_segundos,
+        archivoAprobacion: ticket.archivoAprobacion,
+        pendienteMotivo: ticket.pendienteMotivo,
+        pendienteTiempoEstimado: ticket.pendienteTiempoEstimado,
+        pendienteActualizadoEn: ticket.pendienteActualizadoEn,
+        evaluacionUltimoRecordatorio: ticket.evaluacion_ultimo_recordatorio,
+        evaluacionRecordatorioContador: ticket.evaluacion_recordatorio_contador,
+        evaluacionCierreAutomatico: ticket.evaluacion_cierre_automatico === 1,
+        tecnicoAsignado: ticket.tecnico_nombre || null,
+        comentarioAdminTecnico: ticket.comentario_admin_tecnico || null,
+        enTiempo: enTiempo,
+        evaluacion: ticket.calificacion ? {
+          calificacion: ticket.calificacion,
+          comentario: ticket.comentario_evaluacion,
+          fechaEvaluacion: ticket.fecha_evaluacion
+        } : null,
+        reapertura: ticket.reapertura_id ? {
+          id: ticket.reapertura_id,
+          observacionesUsuario: ticket.reapertura_observaciones_usuario,
+          causaTecnico: ticket.reapertura_causa_tecnico,
+          fechaReapertura: ticket.reapertura_fecha_reapertura,
+          fechaRespuestaTecnico: ticket.reapertura_fecha_respuesta_tecnico
+        } : null,
+        mostrarEstadoReabierto: !!ticket.reapertura_id,
+        usuario: {
+          nombre: ticket.usuario_nombre,
+          correo: ticket.usuario_correo
+        }
+      };
+    });
 
     res.json(formattedTickets);
 
@@ -1944,6 +2056,8 @@ router.get('/:id', authenticateToken, async (req, res) => {
         s.subcategoria,
         t.descripcion,
         s.tiempo_objetivo as tiempoEstimado,
+        s.tiempo_maximo,
+        t.tiempo_restante_finalizacion,
         t.estatus as estado,
         t.prioridad,
         t.fecha_creacion,
@@ -1960,7 +2074,8 @@ router.get('/:id', authenticateToken, async (req, res) => {
         tec.nombre as tecnico_nombre,
         e.calificacion,
         e.comentario as comentario_evaluacion,
-        e.fecha_evaluacion
+        e.fecha_evaluacion,
+        ${sqlCalcularEnTiempo()}
       FROM Tickets t
       JOIN Servicios s ON t.id_servicio = s.id_servicio
       JOIN Usuarios u ON t.id_usuario = u.id_usuario
@@ -1980,12 +2095,23 @@ router.get('/:id', authenticateToken, async (req, res) => {
     // El comentario técnico solo es visible para el técnico asignado
     const esTecnicoAsignado = ticket.id_tecnico === req.user.id_usuario;
 
+    // Calcular enTiempo si no viene del SQL (fallback)
+    let enTiempo = ticket.en_tiempo !== null && ticket.en_tiempo !== undefined 
+      ? ticket.en_tiempo === 1 
+      : calcularEnTiempo(ticket.fecha_creacion, ticket.fecha_cierre, ticket.tiempoEstimado);
+
+    // Usar tiempo_maximo si está disponible, sino usar tiempo_objetivo para el countdown
+    const tiempoParaCountdown = ticket.tiempo_maximo || ticket.tiempoEstimado;
+
     const formattedTicket = {
       id: ticket.id,
       categoria: ticket.categoria,
       subcategoria: ticket.subcategoria,
       descripcion: ticket.descripcion,
-      tiempoEstimado: ticket.tiempoEstimado,
+      tiempoEstimado: tiempoParaCountdown, // Usar tiempo_maximo si existe, sino tiempo_objetivo
+      tiempoObjetivo: ticket.tiempoEstimado, // Mantener tiempo_objetivo original
+      tiempoMaximo: ticket.tiempo_maximo,
+      tiempoRestanteFinalizacion: ticket.tiempo_restante_finalizacion, // Tiempo restante calculado en segundos
       estado: ticket.estado,
       prioridad: ticket.prioridad,
       fechaCreacion: ticket.fecha_creacion,
@@ -1997,6 +2123,7 @@ router.get('/:id', authenticateToken, async (req, res) => {
       tecnicoAsignado: ticket.tecnico_nombre,
       evaluacionCierreAutomatico: ticket.evaluacion_cierre_automatico === 1,
       comentarioAdminTecnico: esTecnicoAsignado ? ticket.comentario_admin_tecnico : null,
+      enTiempo: enTiempo,
       evaluacion: ticket.calificacion ? {
         calificacion: ticket.calificacion,
         comentario: ticket.comentario_evaluacion,

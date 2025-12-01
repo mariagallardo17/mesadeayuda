@@ -87,6 +87,8 @@ export class CountdownService {
 
         countdownSubject.next(countdownInfo);
       }
+    }, undefined, () => {
+      // On complete, no hacer nada
     });
 
     this.subscriptions.set(ticketId, subscription);
@@ -167,22 +169,39 @@ export class CountdownService {
   }
 
   /**
-   * Formatea el tiempo para mostrar
+   * Formatea el tiempo para mostrar en cuenta regresiva
    */
   private formatTime(hours: number, minutes: number, seconds: number): string {
-    // Convertir a formato de días + HH:MM
-    const totalHours = hours;
-    const days = Math.floor(totalHours / 24);
-    const remainingHours = totalHours % 24;
-    const h = remainingHours.toString().padStart(2, '0');
-    const m = minutes.toString().padStart(2, '0');
+    // Si hay días
+    const days = Math.floor(hours / 24);
+    const remainingHours = hours % 24;
 
     if (days > 0) {
       const labelDia = days === 1 ? 'día' : 'días';
-      return `${days} ${labelDia} y ${h}:${m} horas`;
+      const h = remainingHours.toString().padStart(2, '0');
+      const m = minutes.toString().padStart(2, '0');
+      const s = seconds.toString().padStart(2, '0');
+      return `${days} ${labelDia} ${h}:${m}:${s}`;
     }
 
-    return `${h}:${m} horas`;
+    // Si hay horas (pero menos de 24)
+    if (hours > 0) {
+      const h = hours.toString().padStart(2, '0');
+      const m = minutes.toString().padStart(2, '0');
+      const s = seconds.toString().padStart(2, '0');
+      return `${h}:${m}:${s}`;
+    }
+
+    // Si solo hay minutos (menos de 1 hora) - mostrar MM:SS
+    if (minutes > 0) {
+      const m = minutes.toString().padStart(2, '0');
+      const s = seconds.toString().padStart(2, '0');
+      return `${m}:${s}`;
+    }
+
+    // Si solo hay segundos (menos de 1 minuto)
+    const s = seconds.toString().padStart(2, '0');
+    return `00:${s}`;
   }
 
   /**
