@@ -18,6 +18,11 @@ package-lock.json
 frontend/package-lock.json
 backend/package-lock.json
 
+# PHP
+backend/vendor/
+composer.phar
+backend/composer.lock
+
 # IDEs and editors
 .idea/
 .project
