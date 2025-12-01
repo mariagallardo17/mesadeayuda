@@ -25,30 +25,23 @@
       </div>
 
       <!-- User Profile Dropdown -->
-      <div class="user-profile" (click)="toggleUserMenu()" [class.active]="showUserMenu">
-        <div class="user-info">
-          <span class="user-name">{{ getFullName() }}</span>
-          <span class="user-role">{{ getRoleLabel(currentUser.rol) }}</span>
-        </div>
-        <div class="user-avatar">
-          <span class="user-initials">{{ getUserInitials() }}</span>
-        </div>
-      </div>
-
-      <!-- User Menu Dropdown -->
-      <div class="user-menu" *ngIf="showUserMenu" (click)="closeUserMenu()">
-        <div class="user-menu-content" (click)="$event.stopPropagation()">
-          <!-- User Info in Menu -->
-          <div class="menu-user-info">
-            <div class="menu-user-avatar">
-              <span class="menu-user-initials">{{ getUserInitials() }}</span>
-            </div>
-            <div class="menu-user-details">
-              <span class="menu-user-name">{{ getFullName() }}</span>
-              <span class="menu-user-role">{{ getRoleLabel(currentUser.rol) }}</span>
-            </div>
+      <div class="user-profile-container">
+        <div class="user-profile" (click)="toggleUserMenu()" [class.active]="showUserMenu">
+          <div class="user-info">
+            <span class="user-name">{{ getFullName() }}</span>
+            <span class="user-role">{{ getRoleLabel(currentUser.rol) }}</span>
           </div>
-
+          <div class="user-avatar">
+            <span class="user-initials">{{ getUserInitials() }}</span>
+          </div>
+        </div>
+        
+        <!-- Logout Button dentro del mismo contenedor -->
+        <div class="user-menu" *ngIf="showUserMenu" (click)="$event.stopPropagation()">
+          <button class="menu-logout-btn" (click)="logout()">
+            <span class="logout-icon"></span>
+            <span class="logout-text">Cerrar Sesión</span>
+          </button>
         </div>
       </div>
     </div>

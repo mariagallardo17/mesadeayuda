@@ -68,20 +68,25 @@ export class TicketTrackingComponent implements OnInit, OnDestroy {
 
   loadTickets(): void {
     this.isLoading = true;
+    console.log('🔄 Cargando tickets en seguimiento...');
     this.ticketService.getMyTickets().pipe(
       takeUntil(this.destroy$)
     ).subscribe({
       next: (tickets) => {
+        console.log('📋 Tickets recibidos del backend:', tickets.length);
+        console.log('📋 Lista completa de tickets:', tickets);
         const visibles = tickets.filter(ticket => !ticket.reapertura);
+        console.log('✅ Tickets visibles (sin reapertura):', visibles.length);
+        console.log('✅ Lista de tickets visibles:', visibles);
         this.tickets = visibles;
         this.filteredTickets = visibles;
         this.isLoading = false;
-        console.log('Tickets cargados:', tickets);
       },
       error: (error) => {
-        console.error('Error cargando tickets:', error);
+        console.error('❌ Error cargando tickets:', error);
+        console.error('❌ Detalles del error:', error.error);
         this.isLoading = false;
-        alert('Error al cargar los tickets');
+        alert('Error al cargar los tickets: ' + (error.error?.error || error.message));
       }
     });
   }
@@ -111,10 +116,30 @@ export class TicketTrackingComponent implements OnInit, OnDestroy {
     this.showTicketDetails = true;
     console.log('Ver detalles del ticket:', ticket);
 
-    // Si el ticket está pendiente, cambiarlo automáticamente a "En Progreso"
+    // SOLO técnicos y administradores pueden cambiar automáticamente el estado
+    // Y solo si el ticket está asignado a ellos o lo crearon
+    const currentUser = this.authService.getCurrentUser();
+    const esTecnicoOAdmin = currentUser?.rol === 'tecnico' || currentUser?.rol === 'administrador';
     const tienePendienteManual = !!ticket.pendienteMotivo;
-    if (ticket.estado === 'Pendiente' && !tienePendienteManual) {
+    
+    // Verificar si el usuario es el técnico asignado o el creador del ticket
+    const esTecnicoAsignado = ticket.tecnicoAsignado && (
+      (typeof ticket.tecnicoAsignado === 'object' && ticket.tecnicoAsignado.nombre) ||
+      (typeof ticket.tecnicoAsignado === 'string')
+    );
+    const esCreadorDelTicket = currentUser?.id && ticket.usuarioId === currentUser.id;
+    
+    if (esTecnicoOAdmin && ticket.estado === 'Pendiente' && !tienePendienteManual && (esTecnicoAsignado || esCreadorDelTicket)) {
+      console.log('✅ Usuario autorizado - Cambiando estado automáticamente a En Progreso');
       this.cambiarEstadoAutomatico(ticket, 'En Progreso');
+    } else {
+      console.log('❌ No se cambia el estado automáticamente:', {
+        esTecnicoOAdmin,
+        estado: ticket.estado,
+        tienePendienteManual,
+        esTecnicoAsignado,
+        esCreadorDelTicket
+      });
     }
   }
 

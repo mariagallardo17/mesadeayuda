@@ -198,19 +198,4 @@
 
     </nav>
   </div>
-
-  <!-- Footer del menú -->
-  <div class="sidebar-footer">
-    <div class="user-info">
-      <div class="user-avatar">👤</div>
-      <div class="user-details" *ngIf="!isCollapsed">
-        <span class="user-name">{{ currentUser?.nombre }} {{ currentUser?.apellido }}</span>
-        <span class="user-role">{{ currentUser?.rol | titlecase }}</span>
-      </div>
-    </div>
-    <button class="logout-btn" (click)="logout()" title="Cerrar Sesión">
-      <span class="logout-icon">🚪</span>
-      <span class="logout-text" *ngIf="!isCollapsed">Cerrar Sesión</span>
-    </button>
-  </div>
 </div>

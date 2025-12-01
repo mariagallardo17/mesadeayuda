@@ -9,8 +9,10 @@ const ticketRoutes = require('./routes/tickets');
 const serviceRoutes = require('./routes/services');
 const assignmentRoutes = require('./routes/assignments');
 const reportsRoutes = require('./routes/reports');
+const reportesRoutes = require('./routes/reportes');
 const notificationRoutes = require('./routes/notifications');
 const { startEvaluationScheduler } = require('./services/evaluationScheduler');
+const { iniciarSchedulerReportesMensuales } = require('./services/reportesMensualesScheduler');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -56,6 +58,7 @@ app.use('/api/tickets', ticketRoutes);
 app.use('/api/services', serviceRoutes);
 app.use('/api/assignments', assignmentRoutes);
 app.use('/api/reports', reportsRoutes);
+app.use('/api/reportes', reportesRoutes);
 app.use('/api/notifications', notificationRoutes);
 
 app.get('/api/health', async (req, res) => {
@@ -92,6 +95,7 @@ app.listen(PORT, '0.0.0.0', async () => {
     console.log(`✅ Servidor listo para recibir peticiones`);
     console.log(`📍 Accede desde tu celular usando: http://TU_IP_LOCAL:${PORT}`);
     startEvaluationScheduler();
+    iniciarSchedulerReportesMensuales();
   } else {
     console.log(`⚠️  Servidor iniciado pero sin conexión a la base de datos`);
   }

@@ -117,14 +117,7 @@
   margin: 0;
 }
 
-.sidebar-container.collapsed .user-info {
-  justify-content: center;
-}
-
-.sidebar-container.collapsed .logout-btn {
-  justify-content: center;
-  padding: 10px 8px;
-}
+/* Estilos del footer removidos - el usuario y logout solo están en el header */
 
 .sidebar-container.mobile {
   transform: translateX(-100%);
@@ -318,96 +311,7 @@
   font-weight: 500;
 }
 
-/* Footer del menú */
-.sidebar-footer {
-  padding: 20px;
-  border-top: 1px solid #90caf9;
-  background: rgba(255, 255, 255, 0.1);
-}
-
-.user-info {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 15px;
-}
-
-.user-avatar {
-  width: 40px;
-  height: 40px;
-  background: linear-gradient(135deg, #1976d2 0%, #1565c0 100%);
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 1.2rem;
-  color: white;
-  box-shadow: 0 2px 8px rgba(25, 118, 210, 0.3);
-}
-
-.user-details {
-  display: flex;
-  flex-direction: column;
-  transition: opacity 0.3s ease;
-}
-
-.sidebar-container.collapsed .user-details {
-  opacity: 0;
-  width: 0;
-  overflow: hidden;
-}
-
-.user-name {
-  font-size: 0.9rem;
-  font-weight: 600;
-  color: #1976d2;
-  line-height: 1.2;
-}
-
-.user-role {
-  font-size: 0.75rem;
-  color: #64b5f6;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.logout-btn {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 15px;
-  background: linear-gradient(135deg, #f44336 0%, #d32f2f 100%);
-  color: white;
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  font-size: 0.9rem;
-  font-weight: 500;
-  transition: all 0.3s ease;
-  box-shadow: 0 2px 8px rgba(244, 67, 54, 0.3);
-}
-
-.logout-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 12px rgba(244, 67, 54, 0.4);
-}
-
-.logout-icon {
-  font-size: 1.1rem;
-  min-width: 20px;
-  text-align: center;
-}
-
-.logout-text {
-  transition: opacity 0.3s ease;
-}
-
-.sidebar-container.collapsed .logout-text {
-  opacity: 0;
-  width: 0;
-  overflow: hidden;
-}
+/* Footer del menú removido - el usuario y logout solo están en el header */
 
 /* Responsive - Tablet (768px - 1024px) */
 @media (max-width: 1024px) {
@@ -504,24 +408,7 @@
     font-size: 0.9rem;
   }
 
-  .sidebar-footer {
-    padding: 16px;
-  }
-
-  .user-info {
-    gap: 10px;
-  }
-
-  .user-avatar {
-    width: 38px;
-    height: 38px;
-    font-size: 1.1rem;
-  }
-
-  .logout-btn {
-    padding: 12px 14px;
-    font-size: 0.85rem;
-  }
+  /* Estilos del footer removidos */
 }
 
 /* Responsive - Móvil pequeño (< 480px) */
@@ -592,38 +479,7 @@
     padding: 3px 6px;
   }
 
-  .sidebar-footer {
-    padding: 14px;
-  }
-
-  .user-info {
-    gap: 10px;
-    margin-bottom: 12px;
-  }
-
-  .user-avatar {
-    width: 35px;
-    height: 35px;
-    font-size: 1rem;
-  }
-
-  .user-name {
-    font-size: 0.85rem;
-  }
-
-  .user-role {
-    font-size: 0.7rem;
-  }
-
-  .logout-btn {
-    padding: 10px 12px;
-    font-size: 0.8rem;
-    gap: 10px;
-  }
-
-  .logout-icon {
-    font-size: 1rem;
-  }
+  /* Estilos del footer removidos */
 }
 
 /* Animaciones adicionales */
