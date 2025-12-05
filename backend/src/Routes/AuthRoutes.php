@@ -51,7 +51,7 @@ class AuthRoutes
             // Find user in database
             $stmt = $this->db->query(
                 'SELECT id_usuario, correo, password, rol, nombre, password_temporal, num_empleado, departamento, estatus 
-                 FROM Usuarios WHERE correo = ? AND estatus = "Activo"',
+                 FROM usuarios WHERE correo = ? AND estatus = "Activo"',
                 [$correo]
             );
             
