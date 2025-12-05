@@ -2,6 +2,8 @@
 
 This is the PHP backend for the Mesa de Ayuda (Help Desk) system, migrated from Node.js/Express.
 
+> **Migration Branch:** ld1-1002-migrate-missing-endpoints-to-php
+
 ## Requirements
 
 - PHP >= 8.0

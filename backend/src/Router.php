@@ -8,6 +8,7 @@ use App\Routes\TicketRoutes;
 use App\Routes\ServiceRoutes;
 use App\Routes\AssignmentRoutes;
 use App\Routes\ReportRoutes;
+use App\Routes\ReportesRoutes;
 use App\Routes\NotificationRoutes;
 
 class Router
@@ -28,6 +29,7 @@ class Router
         new ServiceRoutes($this);
         new AssignmentRoutes($this);
         new ReportRoutes($this);
+        new ReportesRoutes($this);
         new NotificationRoutes($this);
     }
     
