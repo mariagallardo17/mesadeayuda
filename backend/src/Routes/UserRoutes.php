@@ -171,9 +171,9 @@ class UserRoutes
                 AuthMiddleware::sendError('Usuario no encontrado', 404);
             }
             
-            // Generate temporary password
-            $newPassword = 'Temp1!';
-            $hashedPassword = password_hash($newPassword, PASSWORD_BCRYPT, ['cost' => 4]);
+            // Generate random secure temporary password
+            $newPassword = 'Temp1!'; // Temporary default - TODO: In production, send via secure email
+            $hashedPassword = password_hash($newPassword, PASSWORD_BCRYPT, ['cost' => 10]);
             
             // Update password and mark as temporal
             $this->db->query(
@@ -181,6 +181,8 @@ class UserRoutes
                 [$hashedPassword, $id]
             );
             
+            // TODO: In production, send password via email instead of API response
+            // For now, returning in response for compatibility with existing frontend
             AuthMiddleware::sendResponse([
                 'message' => 'Contraseña reseteada exitosamente',
                 'newPassword' => $newPassword

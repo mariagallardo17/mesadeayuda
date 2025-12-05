@@ -455,7 +455,10 @@ class TicketRoutes
         $user = AuthMiddleware::authenticate();
         
         try {
-            $disposition = isset($_GET['disposition']) && $_GET['disposition'] === 'inline' ? 'inline' : 'attachment';
+            // Validate disposition parameter
+            $allowedDispositions = ['inline', 'attachment'];
+            $requestedDisposition = $_GET['disposition'] ?? 'attachment';
+            $disposition = in_array($requestedDisposition, $allowedDispositions) ? $requestedDisposition : 'attachment';
             
             $stmt = $this->db->query(
                 'SELECT archivo_aprobacion, id_usuario, id_tecnico FROM Tickets WHERE id_ticket = ?',
@@ -481,14 +484,27 @@ class TicketRoutes
                 AuthMiddleware::sendError('No tienes permisos para acceder a esta carta de aprobación', 403);
             }
             
-            $filePath = __DIR__ . '/../../uploads/' . $ticket['archivo_aprobacion'];
+            // Validate and sanitize filename to prevent path traversal
+            $filename = basename($ticket['archivo_aprobacion']);
+            if (empty($filename) || $filename !== $ticket['archivo_aprobacion']) {
+                AuthMiddleware::sendError('Nombre de archivo inválido', 400);
+            }
+            
+            $filePath = __DIR__ . '/../../uploads/' . $filename;
             
             if (!file_exists($filePath)) {
                 AuthMiddleware::sendError('Archivo no encontrado en el servidor', 404);
             }
             
+            // Additional security: verify file is within uploads directory
+            $realPath = realpath($filePath);
+            $uploadsDir = realpath(__DIR__ . '/../../uploads/');
+            if ($realPath === false || strpos($realPath, $uploadsDir) !== 0) {
+                AuthMiddleware::sendError('Acceso denegado', 403);
+            }
+            
             header('Content-Type: application/pdf');
-            header('Content-Disposition: ' . $disposition . '; filename="' . urlencode($ticket['archivo_aprobacion']) . '"');
+            header('Content-Disposition: ' . $disposition . '; filename="' . preg_replace('/[^a-zA-Z0-9._-]/', '_', $filename) . '"');
             readfile($filePath);
             exit;
             
@@ -507,14 +523,27 @@ class TicketRoutes
         AuthMiddleware::authenticate();
         
         try {
-            $filePath = __DIR__ . '/../../uploads/' . $filename;
+            // Validate and sanitize filename to prevent path traversal
+            $safeFilename = basename($filename);
+            if (empty($safeFilename) || $safeFilename !== $filename) {
+                AuthMiddleware::sendError('Nombre de archivo inválido', 400);
+            }
+            
+            $filePath = __DIR__ . '/../../uploads/' . $safeFilename;
             
             if (!file_exists($filePath)) {
                 AuthMiddleware::sendError('Archivo no encontrado', 404);
             }
             
+            // Additional security: verify file is within uploads directory
+            $realPath = realpath($filePath);
+            $uploadsDir = realpath(__DIR__ . '/../../uploads/');
+            if ($realPath === false || strpos($realPath, $uploadsDir) !== 0) {
+                AuthMiddleware::sendError('Acceso denegado', 403);
+            }
+            
             header('Content-Type: application/octet-stream');
-            header('Content-Disposition: attachment; filename="' . urlencode($filename) . '"');
+            header('Content-Disposition: attachment; filename="' . preg_replace('/[^a-zA-Z0-9._-]/', '_', $safeFilename) . '"');
             readfile($filePath);
             exit;
             
