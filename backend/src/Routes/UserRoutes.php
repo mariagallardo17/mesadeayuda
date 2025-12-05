@@ -23,6 +23,7 @@ class UserRoutes
         $this->router->addRoute('GET', '/users/:id', [$this, 'getUserById']);
         $this->router->addRoute('POST', '/users', [$this, 'createUser']);
         $this->router->addRoute('PUT', '/users/:id', [$this, 'updateUser']);
+        $this->router->addRoute('POST', '/users/:id/reset-password', [$this, 'resetPassword']);
         $this->router->addRoute('DELETE', '/users/:id', [$this, 'deleteUser']);
     }
     
@@ -144,6 +145,48 @@ class UserRoutes
             AuthMiddleware::sendResponse(['message' => 'Usuario actualizado exitosamente']);
         } catch (\Exception $e) {
             error_log('Error updating user: ' . $e->getMessage());
+            AuthMiddleware::sendError('Error interno del servidor', 500);
+        }
+    }
+    
+    public function resetPassword($id)
+    {
+        $user = AuthMiddleware::authenticate();
+        
+        // Check admin permissions
+        if ($user['rol'] !== 'administrador') {
+            AuthMiddleware::sendError('No tienes permisos para resetear contraseñas', 403);
+        }
+        
+        try {
+            // Check if user exists
+            $stmt = $this->db->query(
+                'SELECT id_usuario, nombre FROM Usuarios WHERE id_usuario = ?',
+                [$id]
+            );
+            
+            $targetUser = $stmt->fetch();
+            
+            if (!$targetUser) {
+                AuthMiddleware::sendError('Usuario no encontrado', 404);
+            }
+            
+            // Generate temporary password
+            $newPassword = 'Temp1!';
+            $hashedPassword = password_hash($newPassword, PASSWORD_BCRYPT, ['cost' => 4]);
+            
+            // Update password and mark as temporal
+            $this->db->query(
+                'UPDATE Usuarios SET password = ?, password_temporal = TRUE, fecha_ultimo_cambio = NOW() WHERE id_usuario = ?',
+                [$hashedPassword, $id]
+            );
+            
+            AuthMiddleware::sendResponse([
+                'message' => 'Contraseña reseteada exitosamente',
+                'newPassword' => $newPassword
+            ]);
+        } catch (\Exception $e) {
+            error_log('Error resetting password: ' . $e->getMessage());
             AuthMiddleware::sendError('Error interno del servidor', 500);
         }
     }
