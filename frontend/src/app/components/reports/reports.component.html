@@ -1,0 +1,371 @@
+<div class="reports-container">
+  <div class="reports-header">
+    <h1>📊 Reportes de Gestión de Servicios</h1>
+    <p>Análisis completo del rendimiento del sistema de mesa de ayuda</p>
+  </div>
+
+  <!-- Filtros de fecha -->
+  <div class="filters-section">
+    <div class="date-filters">
+      <div class="filter-group">
+        <label for="fechaInicio">Fecha de inicio:</label>
+        <input type="date" id="fechaInicio" [(ngModel)]="fechaInicio" (change)="cargarReportes()">
+      </div>
+      <div class="filter-group">
+        <label for="fechaFin">Fecha de fin:</label>
+        <input type="date" id="fechaFin" [(ngModel)]="fechaFin" (change)="cargarReportes()">
+      </div>
+      <button class="filter-btn" (click)="cargarReportes()" [disabled]="isLoading">
+        <i class="fas fa-sync-alt" [class.fa-spin]="isLoading"></i>
+        Actualizar Reportes
+      </button>
+      <button class="filter-btn" (click)="cargarTodosLosTickets()" [disabled]="isLoading" style="margin-left: 10px; background-color: #6c757d;">
+        <i class="fas fa-calendar-alt"></i>
+        Cargar Todos los Tickets
+      </button>
+    </div>
+    <!-- Mensaje cuando no hay datos -->
+    <div class="no-data-message" *ngIf="!isLoading && reportes.ticketsSolicitados === 0 && fechaInicio && fechaFin">
+      <p>⚠️ No se encontraron tickets en el rango de fechas seleccionado ({{ fechaInicio }} - {{ fechaFin }}).</p>
+      <p>Intenta seleccionar un rango de fechas diferente o haz clic en "Cargar Todos los Tickets" para ver todos los datos disponibles.</p>
+    </div>
+  </div>
+
+  <!-- Métricas principales -->
+  <div class="metrics-grid">
+    <!-- Número de tickets solicitados por los usuarios -->
+    <div class="metric-card tickets-requested">
+      <div class="metric-icon">🎫</div>
+      <div class="metric-content">
+        <h3>Tickets Solicitados</h3>
+        <div class="metric-value">{{ reportes.ticketsSolicitados || 0 }}</div>
+        <p class="metric-description">Total de tickets creados por usuarios</p>
+      </div>
+    </div>
+
+    <!-- Número de tickets atendidos -->
+    <div class="metric-card tickets-weekly">
+      <div class="metric-icon">📅</div>
+      <div class="metric-content">
+        <h3>Tickets Atendidos</h3>
+        <div class="metric-value">{{ reportes.ticketsAtendidos || 0 }}</div>
+        <p class="metric-description">Tickets asignados y trabajados</p>
+      </div>
+    </div>
+
+    <!-- Tickets cerrados por el sistema -->
+    <div class="metric-card tickets-system-closed">
+      <div class="metric-icon">🤖</div>
+      <div class="metric-content">
+        <h3>Tickets Cerrados por el Sistema</h3>
+        <div class="metric-value">{{ reportes.ticketsCerradosPorSistema || 0 }}</div>
+        <p class="metric-description">Tickets cerrados automáticamente</p>
+      </div>
+    </div>
+
+    <!-- Número de tickets asignados por técnicos -->
+    <div class="metric-card tickets-assigned">
+      <div class="metric-icon">👥</div>
+      <div class="metric-content">
+        <h3>Tickets Asignados</h3>
+        <div class="metric-value">{{ reportes.ticketsAsignados || 0 }}</div>
+        <p class="metric-description">Tickets distribuidos a técnicos</p>
+      </div>
+    </div>
+
+    <!-- Número de Tickets pendientes -->
+    <div class="metric-card tickets-pending">
+      <div class="metric-icon">⏳</div>
+      <div class="metric-content">
+        <h3>Tickets Pendientes</h3>
+        <div class="metric-value">{{ reportes.ticketsPendientes || 0 }}</div>
+        <p class="metric-description">Tickets en espera de atención</p>
+      </div>
+    </div>
+
+    <!-- Número de tickets sin cierre por el usuario -->
+    <div class="metric-card tickets-unclosed">
+      <div class="metric-icon">🔓</div>
+      <div class="metric-content">
+        <h3>Tickets Sin Cerrar</h3>
+        <div class="metric-value">{{ reportes.ticketsSinCerrar || 0 }}</div>
+        <p class="metric-description">Tickets finalizados sin evaluación</p>
+      </div>
+    </div>
+
+    <!-- Número de tickets escalados -->
+    <div class="metric-card tickets-escalated">
+      <div class="metric-icon">⬆️</div>
+      <div class="metric-content">
+        <h3>Tickets Escalados</h3>
+        <div class="metric-value">{{ reportes.ticketsEscalados || 0 }}</div>
+        <p class="metric-description">Tickets que requirieron escalamiento</p>
+      </div>
+    </div>
+
+    <!-- Número de tickets finalizados fuera de tiempo -->
+    <div class="metric-card tickets-late">
+      <div class="metric-icon">⏰</div>
+      <div class="metric-content">
+        <h3>Tickets Tardíos</h3>
+        <div class="metric-value">{{ reportes.ticketsTardios || 0 }}</div>
+        <p class="metric-description">Tickets finalizados fuera del tiempo estimado</p>
+      </div>
+    </div>
+
+    <!-- Número de tickets reabiertos -->
+    <div class="metric-card tickets-reopened">
+      <div class="metric-icon">🔄</div>
+      <div class="metric-content">
+        <h3>Tickets Reabiertos</h3>
+        <div class="metric-value">{{ reportes.ticketsReabiertos || 0 }}</div>
+        <p class="metric-description">Tickets que han sido reabiertos por usuarios</p>
+      </div>
+    </div>
+
+    <!-- Evaluaciones tardías -->
+    <div class="metric-card evaluations-late">
+      <div class="metric-icon">⏳</div>
+      <div class="metric-content">
+        <h3>Evaluaciones Tardías</h3>
+        <div class="metric-value">{{ reportes.evaluacionesTardias || 0 }}</div>
+        <p class="metric-description">Tickets finalizados sin evaluación después de 2 días</p>
+      </div>
+    </div>
+
+    <!-- Satisfacción del usuario -->
+    <div class="metric-card user-satisfaction">
+      <div class="metric-icon">⭐</div>
+      <div class="metric-content">
+        <h3>Satisfacción del Usuario</h3>
+        <div class="metric-value">{{ reportes.satisfaccionPromedio || 0 }}/5</div>
+        <p class="metric-description">Calificación promedio de los servicios</p>
+        <div class="stars-display">
+          <span *ngFor="let star of [1,2,3,4,5]" class="star" [class.active]="star <= (reportes.satisfaccionPromedio || 0)">
+            ⭐
+          </span>
+        </div>
+      </div>
+    </div>
+
+    <!-- MTTR - Tiempo Promedio de Resolución -->
+    <div class="metric-card mttr">
+      <div class="metric-icon">⏱️</div>
+      <div class="metric-content">
+        <h3>MTTR</h3>
+        <div class="metric-value">{{ reportes.mttrHoras || 0 }}h {{ reportes.mttrMinutos || 0 }}min</div>
+        <p class="metric-description">Tiempo promedio de resolución</p>
+      </div>
+    </div>
+
+    <!-- MTTA - Tiempo Promedio de Atención -->
+    <div class="metric-card mtta">
+      <div class="metric-icon">⚡</div>
+      <div class="metric-content">
+        <h3>MTTA</h3>
+        <div class="metric-value">{{ reportes.mttaMinutos || 0 }} min</div>
+        <p class="metric-description">Tiempo promedio de atención</p>
+      </div>
+    </div>
+
+    <!-- Cumplimiento de SLA -->
+    <div class="metric-card sla-compliance">
+      <div class="metric-icon">✅</div>
+      <div class="metric-content">
+        <h3>Cumplimiento SLA</h3>
+        <div class="metric-value">{{ reportes.cumplimientoSLA || 0 }}%</div>
+        <p class="metric-description">Tickets resueltos dentro del tiempo objetivo</p>
+      </div>
+    </div>
+
+    <!-- Porcentaje de Actualizaciones -->
+    <div class="metric-card updates-percentage">
+      <div class="metric-icon">📝</div>
+      <div class="metric-content">
+        <h3>Actualizaciones de Estado</h3>
+        <div class="metric-value">{{ reportes.porcentajeActualizaciones || 0 }}%</div>
+        <p class="metric-description">Tickets con actualizaciones registradas</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tickets por semana -->
+  <div class="weekly-tickets-section" *ngIf="reportes.ticketsPorSemana && reportes.ticketsPorSemana.length > 0">
+    <h3>📊 Tickets Generados por Semana</h3>
+    <div class="weekly-tickets-grid">
+      <div class="week-card" *ngFor="let cantidad of reportes.ticketsPorSemana; let i = index">
+        <div class="week-label">Semana {{ i + 1 }}</div>
+        <div class="week-value">{{ cantidad }}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Distribución por tipo de servicio -->
+  <div class="service-distribution-section" *ngIf="distribucionServicios.length > 0">
+    <h3>📋 Distribución por Tipo de Servicio</h3>
+    <div class="service-list">
+      <div class="service-item" *ngFor="let servicio of distribucionServicios">
+        <div class="service-name">{{ servicio.tipoServicio }}</div>
+        <div class="service-count">{{ servicio.total }}</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Gráficos y análisis detallados -->
+  <div class="charts-section">
+    <!-- Gráfica de barras: Tickets por semana -->
+    <div class="chart-container" *ngIf="reportes.ticketsPorSemana && reportes.ticketsPorSemana.length > 0">
+      <h3>📊 Tickets por Semana</h3>
+      <div class="chart-wrapper">
+        <canvas #semanasChart width="400" height="200"></canvas>
+      </div>
+    </div>
+
+    <!-- Gráfica de línea: Tendencia de tickets atendidos vs. pendientes -->
+    <div class="chart-container">
+      <h3>📈 Tendencia: Tickets Atendidos vs. Pendientes</h3>
+      <div class="chart-wrapper">
+        <canvas #tendenciaChart width="400" height="200"></canvas>
+      </div>
+    </div>
+
+    <!-- Gráfica de pastel: Tickets por estado -->
+    <div class="chart-container">
+      <h3>🥧 Distribución de Tickets por Estado</h3>
+      <div class="chart-wrapper">
+        <canvas #estadosPieChart width="400" height="400" [style.display]="distribucionEstados.length > 0 ? 'block' : 'none'"></canvas>
+        <!-- Fallback si no hay datos -->
+        <div class="chart-placeholder" *ngIf="distribucionEstados.length === 0">
+          <p>No hay datos disponibles para mostrar</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Gráfica de barras: Distribución por estado (alternativa) -->
+    <div class="chart-container">
+      <h3>📊 Distribución de Tickets por Estado (Barras)</h3>
+      <div class="chart-wrapper">
+        <canvas #estadosChart width="400" height="400" [style.display]="distribucionEstados.length > 0 ? 'block' : 'none'"></canvas>
+        <!-- Fallback si no hay datos -->
+        <div class="chart-placeholder" *ngIf="distribucionEstados.length === 0">
+          <p>No hay datos disponibles para mostrar</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Gráfica de barras comparativas: Tickets por técnico -->
+    <div class="chart-container">
+      <h3>👨‍💼 Rendimiento por Técnico (Barras Comparativas)</h3>
+      <div class="chart-wrapper">
+        <canvas #rendimientoChart width="400" height="400" [style.display]="rendimientoTecnicos.length > 0 ? 'block' : 'none'"></canvas>
+        <!-- Fallback si no hay datos -->
+        <div class="chart-placeholder" *ngIf="rendimientoTecnicos.length === 0">
+          <p>No hay datos disponibles para mostrar</p>
+          <p class="chart-hint">No hay técnicos con tickets en el período seleccionado</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Histograma: Evaluaciones del usuario -->
+    <div class="chart-container">
+      <h3>⭐ Histograma de Evaluaciones del Usuario</h3>
+      <div class="chart-wrapper">
+        <canvas #evaluacionesChart width="400" height="300"></canvas>
+      </div>
+    </div>
+
+    <!-- Gráfica Radar: Cumplimiento de SLA por técnico -->
+    <div class="chart-container" *ngIf="rendimientoTecnicos.length > 0">
+      <h3>🎯 Cumplimiento de SLA por Técnico (Radar)</h3>
+      <div class="chart-wrapper">
+        <canvas #slaChart width="400" height="400"></canvas>
+      </div>
+    </div>
+
+    <!-- Información detallada de técnicos -->
+    <div class="technicians-performance" *ngIf="rendimientoTecnicos.length > 0">
+      <div class="tech-card" *ngFor="let tech of rendimientoTecnicos">
+        <div class="tech-info">
+          <h4>{{ tech.nombre }}</h4>
+          <p><strong>Tickets Asignados:</strong> {{ tech.ticketsAsignados || 0 }}</p>
+          <p><strong>Tickets Resueltos:</strong> {{ tech.ticketsResueltos || 0 }}</p>
+          <p *ngIf="tech.ticketsPendientes !== undefined"><strong>Pendientes:</strong> {{ tech.ticketsPendientes }}</p>
+        </div>
+        <div class="tech-stats">
+          <div class="stat" *ngIf="tech.ticketsEscalados !== undefined">
+            <span class="stat-label">Escalados:</span>
+            <span class="stat-value">{{ tech.ticketsEscalados }}</span>
+          </div>
+          <div class="stat" *ngIf="tech.ticketsReabiertos !== undefined">
+            <span class="stat-label">Reabiertos:</span>
+            <span class="stat-value">{{ tech.ticketsReabiertos }}</span>
+          </div>
+          <div class="stat" *ngIf="tech.ticketsFueraTiempo !== undefined">
+            <span class="stat-label">Fuera de Tiempo:</span>
+            <span class="stat-value">{{ tech.ticketsFueraTiempo }}</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">Calificación:</span>
+            <span class="stat-value">{{ tech.calificacionPromedio || 0 }}/5</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Resumen ejecutivo -->
+  <div class="executive-summary">
+    <h3>📋 Resumen Ejecutivo</h3>
+    <div class="summary-cards">
+      <div class="summary-card positive">
+        <h4>✅ Fortalezas</h4>
+        <ul>
+          <li *ngIf="reportes.ticketsAtendidos > 0">
+            <strong>{{ reportes.ticketsAtendidos }}</strong> tickets atendidos exitosamente
+          </li>
+          <li *ngIf="reportes.satisfaccionPromedio >= 4">
+            Excelente satisfacción del usuario: <strong>{{ reportes.satisfaccionPromedio }}/5</strong>
+          </li>
+          <li *ngIf="reportes.ticketsEscalados < (reportes.ticketsSolicitados * 0.1) && reportes.ticketsSolicitados > 0">
+            Bajo índice de escalamientos: <strong>{{ reportes.ticketsEscalados }}</strong> de {{ reportes.ticketsSolicitados }} tickets
+          </li>
+          <li *ngIf="reportes.cumplimientoSLA >= 85">
+            Cumplimiento de SLA: <strong>{{ reportes.cumplimientoSLA }}%</strong> (por encima del objetivo)
+          </li>
+          <li *ngIf="reportes.mttaMinutos < 60 && reportes.mttaMinutos > 0">
+            Respuesta rápida: <strong>{{ reportes.mttaMinutos }} minutos</strong> de tiempo promedio de atención
+          </li>
+        </ul>
+      </div>
+
+      <div class="summary-card attention">
+        <h4>⚠️ Áreas de Mejora</h4>
+        <ul>
+          <li *ngIf="reportes.ticketsPendientes > 0">
+            <strong>{{ reportes.ticketsPendientes }}</strong> tickets pendientes requieren atención
+          </li>
+          <li *ngIf="reportes.ticketsTardios > 0">
+            <strong>{{ reportes.ticketsTardios }}</strong> tickets finalizados fuera de tiempo
+          </li>
+          <li *ngIf="reportes.satisfaccionPromedio < 3 && reportes.satisfaccionPromedio > 0">
+            Satisfacción del usuario: <strong>{{ reportes.satisfaccionPromedio }}/5</strong> (necesita mejora)
+          </li>
+          <li *ngIf="reportes.cumplimientoSLA < 85 && reportes.cumplimientoSLA > 0">
+            Cumplimiento de SLA: <strong>{{ reportes.cumplimientoSLA }}%</strong> (por debajo del objetivo del 85%)
+          </li>
+          <li *ngIf="reportes.ticketsReabiertos > 0">
+            <strong>{{ reportes.ticketsReabiertos }}</strong> tickets reabiertos (indica necesidad de mejor seguimiento)
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- Botón de exportar -->
+  <div class="export-section">
+    <button class="export-btn" (click)="exportarReportes()" [disabled]="isLoading">
+      <i class="fas fa-download"></i>
+      Exportar Reportes
+    </button>
+  </div>
+</div>

@@ -1,0 +1,32 @@
+{
+  "name": "mesadeayuda",
+  "version": "1.0.0",
+  "description": "Sistema de Mesa de Ayuda - Frontend y Backend",
+  "private": true,
+  "scripts": {
+    "frontend:install": "cd frontend && npm install",
+    "frontend:start": "cd frontend && npm start",
+    "frontend:build": "cd frontend && npm run build",
+    "frontend:test": "cd frontend && npm test",
+    "backend:install": "cd backend && npm install",
+    "backend:start": "cd backend && npm start",
+    "backend:dev": "cd backend && npm run dev",
+    "install:all": "npm run frontend:install && npm run backend:install",
+    "start:frontend": "npm run frontend:start",
+    "start:backend": "npm run backend:start",
+    "dev": "concurrently \"npm run backend:dev\" \"npm run frontend:start\""
+  },
+  "keywords": [
+    "mesa",
+    "ayuda",
+    "tickets",
+    "soporte",
+    "angular",
+    "nodejs"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

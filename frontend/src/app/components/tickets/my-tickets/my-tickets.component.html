@@ -1,0 +1,444 @@
+<div class="my-tickets-container">
+  <!-- Header -->
+  <div class="tickets-header">
+    <h1>Mis tickets</h1>
+  </div>
+
+  <!-- Filtros y búsqueda -->
+  <div class="filters-container">
+    <div class="search-box">
+      <input
+        type="text"
+        class="search-input"
+        placeholder="Buscar por ID, categoría, descripción, prioridad o estado..."
+        [(ngModel)]="searchText"
+        (input)="onSearchChange()"
+      >
+      <span class="search-icon">🔍</span>
+    </div>
+    <div class="filter-box">
+      <label for="estado-filter">Filtrar por estado:</label>
+      <select
+        id="estado-filter"
+        class="estado-filter"
+        [(ngModel)]="selectedEstado"
+        (change)="onEstadoChange()"
+      >
+        <option value="todos">Todos los estados</option>
+        <option *ngFor="let estado of estados" [value]="estado.value">
+          {{ estado.label }}
+        </option>
+      </select>
+    </div>
+    <button
+      *ngIf="searchText || selectedEstado !== 'todos'"
+      class="clear-filters-btn"
+      (click)="clearFilters()"
+    >
+      Limpiar filtros
+    </button>
+  </div>
+
+  <!-- Tabla de tickets -->
+  <div class="tickets-table-container">
+    <table class="tickets-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>FECHA</th>
+          <th>INFORMACION</th>
+          <th>STATUS</th>
+          <th>PRIORIDAD</th>
+          <th *ngIf="canViewTechnicalInfo">TIEMPO RESTANTE</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr *ngFor="let ticket of filteredTickets" class="ticket-row">
+          <td class="ticket-id">{{ ticket.id }}</td>
+          <td class="ticket-date">{{ ticket.fechaCreacion | date:'dd/MM/yyyy' }}</td>
+          <td class="ticket-info">
+            <button class="ver-detalles-btn" (click)="verDetalles(ticket)">
+              VER DETALLES
+            </button>
+          </td>
+          <td class="ticket-status">
+            <div class="status-indicator" [style.background-color]="getEstadoColor(ticket.estado)"></div>
+            <span class="status-text">{{ getEstadoLabel(ticket.estado) }}</span>
+          </td>
+          <td class="ticket-priority">
+            <div class="priority-badge" [ngClass]="getPriorityClass(ticket)">
+              <span class="priority-text">{{ ticket.prioridad }}</span>
+              <span *ngIf="isUrgent(ticket)" class="urgent-indicator">⚠️ URGENTE</span>
+            </div>
+          </td>
+          <td *ngIf="canViewTechnicalInfo" class="ticket-countdown">
+            <app-countdown
+              *ngIf="ticket.estado !== 'Cerrado' && ticket.estado !== 'Finalizado'"
+              [ticketId]="ticket.id"
+              [creationDate]="parseDate(ticket)"
+              [targetTime]="ticket.tiempoEstimado"
+              [ticketStatus]="ticket.estado"
+              [showLabel]="false"
+              size="small">
+            </app-countdown>
+            <app-countdown
+              *ngIf="ticket.estado === 'Finalizado' || ticket.estado === 'Cerrado'"
+              [ticketId]="ticket.id"
+              [creationDate]="parseDate(ticket)"
+              [targetTime]="ticket.tiempoEstimado"
+              [ticketStatus]="ticket.estado"
+              [tiempoAtencionSegundos]="ticket.tiempoAtencionSegundos"
+              [showLabel]="false"
+              size="small">
+            </app-countdown>
+          </td>
+        </tr>
+        <tr *ngIf="filteredTickets.length === 0 && !isLoading && tickets.length > 0">
+          <td [attr.colspan]="canViewTechnicalInfo ? 6 : 5" class="no-tickets">
+            No se encontraron tickets con los filtros aplicados
+          </td>
+        </tr>
+        <tr *ngIf="tickets.length === 0 && !isLoading">
+          <td [attr.colspan]="canViewTechnicalInfo ? 6 : 5" class="no-tickets">No hay tickets disponibles</td>
+        </tr>
+        <tr *ngIf="isLoading">
+          <td [attr.colspan]="canViewTechnicalInfo ? 6 : 5" class="loading">Cargando tickets...</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- Modal de detalles del ticket -->
+  <div class="modal-overlay" *ngIf="showTicketDetails && selectedTicket" (click)="cerrarDetalles()">
+    <div class="modal-content ticket-details-modal" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <h2>Información del ticket #{{ selectedTicket.id }}</h2>
+        <button class="close-btn" (click)="cerrarDetalles()">×</button>
+      </div>
+
+      <!-- Notificación de cambio automático -->
+      <div class="auto-change-notification" *ngIf="showAutoChangeNotification">
+        <i class="fas fa-info-circle"></i>
+        <span>Estado cambiado automáticamente a "En Progreso"</span>
+      </div>
+
+    <div class="ticket-details-content">
+      <div class="detail-item">
+        <label>Fecha de creación:</label>
+        <span>{{ selectedTicket.fechaCreacion | date:'dd/MM/yyyy HH:mm' }}</span>
+      </div>
+
+      <div class="detail-item">
+        <label>Datos del usuario:</label>
+        <span>{{ selectedTicket.usuario?.nombre }} ({{ selectedTicket.usuario?.correo }})</span>
+      </div>
+
+      <div class="detail-item">
+        <label>Categoría:</label>
+        <span>{{ selectedTicket.categoria }} - {{ selectedTicket.subcategoria }}</span>
+      </div>
+
+      <div class="detail-item">
+        <label>Descripción del ticket:</label>
+        <p class="ticket-description">{{ selectedTicket.descripcion }}</p>
+      </div>
+
+      <div class="pending-details" *ngIf="selectedTicket.pendienteMotivo">
+        <h3 class="pending-title">Motivo de pendiente proporcionado por el técnico</h3>
+        <p class="pending-motive">{{ selectedTicket.pendienteMotivo }}</p>
+        <div class="pending-meta">
+          <span *ngIf="selectedTicket.pendienteTiempoEstimado">
+            <strong>Tiempo estimado para retomar:</strong>
+            {{ selectedTicket.pendienteTiempoEstimado }}
+          </span>
+          <span *ngIf="selectedTicket.pendienteActualizadoEn">
+            <strong>Última actualización:</strong>
+            {{ selectedTicket.pendienteActualizadoEn | date:'dd/MM/yyyy HH:mm' }}
+          </span>
+        </div>
+      </div>
+
+      <div class="detail-item" *ngIf="canViewTechnicalInfo">
+        <label>Tiempo aproximado de solución:</label>
+        <span>{{ selectedTicket.tiempoEstimado }}</span>
+      </div>
+
+      <!-- Documento de aprobación - Solo mostrar si hay archivo adjunto -->
+      <div class="approval-document" *ngIf="selectedTicket.archivoAprobacion">
+        <div class="document-icon">📄</div>
+        <div class="document-info">
+          <span class="document-title">Carta de aprobación</span>
+          <div class="document-actions">
+            <button class="view-btn" (click)="verCartaAprobacion(selectedTicket)">Ver</button>
+            <button class="download-btn" (click)="descargarCartaAprobacion(selectedTicket)">Descargar</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Evaluación del ticket - Solo para empleados -->
+      <div class="ticket-evaluation" *ngIf="puedeEvaluarTicket(selectedTicket) && !puedeCambiarEstados">
+        <h3>Evaluar servicio</h3>
+        <p *ngIf="selectedTicket.estado === 'Finalizado'">El ticket ha sido finalizado. Por favor, evalúa la calidad del servicio recibido:</p>
+        <p *ngIf="selectedTicket.estado === 'Cerrado'">El ticket fue cerrado automáticamente por falta de evaluación. Evalúalo para poder crear nuevos tickets.</p>
+        <form [formGroup]="evaluationForm" (ngSubmit)="evaluarTicket()">
+          <div class="rating-section">
+            <label>Calificación (1-5 estrellas):</label>
+            <div class="star-rating">
+              <span
+                *ngFor="let star of [1,2,3,4,5]"
+                class="star"
+                [class.active]="star <= evaluationForm.get('calificacion')?.value"
+                (click)="setRating(star)">
+                ⭐
+              </span>
+            </div>
+            <div *ngIf="evaluationForm.get('calificacion')?.invalid && evaluationForm.get('calificacion')?.touched" class="error-message">
+              *Debes seleccionar una calificación
+            </div>
+          </div>
+
+          <div class="comment-section">
+            <label for="comentario">Comentarios (opcional):</label>
+            <textarea
+              id="comentario"
+              formControlName="comentario"
+              class="form-control"
+              rows="3"
+              placeholder="Comparte tu experiencia con el servicio...">
+            </textarea>
+          </div>
+
+          <div class="evaluation-actions">
+            <button type="submit" class="evaluate-btn" [disabled]="evaluationForm.invalid || isLoading">
+              <span *ngIf="!isLoading">Evaluar y Cerrar Ticket</span>
+              <span *ngIf="isLoading">Evaluando...</span>
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Mensaje para técnicos cuando el ticket está finalizado pero no evaluado -->
+      <div class="pending-evaluation-message" *ngIf="puedeEvaluarTicket(selectedTicket) && puedeCambiarEstados">
+        <div class="pending-info">
+          <div class="pending-icon">⏳</div>
+          <div class="pending-content">
+            <h3>Ticket Finalizado</h3>
+            <p>Este ticket ha sido finalizado y está esperando la evaluación del empleado.</p>
+            <p>El empleado debe evaluar el servicio para cerrar el ticket.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Mostrar evaluación existente -->
+      <div class="existing-evaluation" *ngIf="selectedTicket.evaluacion">
+        <h3>Evaluación del servicio</h3>
+        <div class="evaluation-display">
+          <div class="rating-display">
+            <span class="rating-label">Calificación:</span>
+            <div class="stars-display">
+              <span *ngFor="let star of [1,2,3,4,5]" class="star" [class.active]="star <= (selectedTicket.evaluacion.calificacion || 0)">
+                ⭐
+              </span>
+              <span class="rating-number">({{ selectedTicket.evaluacion.calificacion || 0 }}/5)</span>
+            </div>
+          </div>
+          <div class="comment-display" *ngIf="selectedTicket.evaluacion?.comentario">
+            <span class="comment-label">Comentario:</span>
+            <p class="comment-text">{{ selectedTicket.evaluacion.comentario }}</p>
+          </div>
+          <div class="evaluation-date">
+            <span class="date-label">Fecha de evaluación:</span>
+            <span class="date-text">{{ selectedTicket.evaluacion.fechaEvaluacion | date:'dd/MM/yyyy HH:mm' }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Panel de cambio de estado - Solo para técnicos y administradores, NO para tickets cerrados -->
+      <div class="status-changer" *ngIf="puedeCambiarEstados && selectedTicket.estado !== 'Cerrado'">
+        <h3>Da click para cambiar estado del ticket</h3>
+        <div class="status-options">
+          <div
+            *ngFor="let estado of estadosDisponibles"
+            class="status-option"
+            [class.selected]="selectedTicket.estado === estado.value"
+            (click)="cambiarEstado(selectedTicket, estado.value)"
+            [style.background-color]="estado.color"
+          >
+            <div class="status-circle" [style.background-color]="estado.color"></div>
+            <span class="status-label">{{ estado.label }}</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Mensaje para tickets cerrados -->
+      <div class="ticket-closed-message" *ngIf="selectedTicket.estado === 'Cerrado'">
+        <div class="closed-info">
+          <div class="closed-icon">🔒</div>
+          <div class="closed-content">
+            <h3>Ticket Cerrado</h3>
+            <p>Este ticket ha sido cerrado y no puede ser modificado.</p>
+            <p>El ticket fue cerrado el {{ selectedTicket.fechaCierre | date:'dd/MM/yyyy HH:mm' }}</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Mensaje informativo para empleados -->
+      <div class="status-info" *ngIf="!puedeCambiarEstados && selectedTicket.estado !== 'Cerrado'">
+        <h3>Estado del ticket</h3>
+        <div class="current-status">
+          <div class="status-display" [style.background-color]="getEstadoColor(selectedTicket.estado)">
+            <span class="status-label">{{ getEstadoLabel(selectedTicket.estado) }}</span>
+          </div>
+          <p class="status-message">
+            <i class="fas fa-info-circle"></i>
+            Solo los técnicos y administradores pueden cambiar el estado del ticket.
+            Tu ticket será revisado por un técnico que lo pondrá en progreso.
+          </p>
+        </div>
+      </div>
+    </div>
+    </div>
+  </div>
+
+  <!-- Modal para marcar ticket como pendiente -->
+  <div class="modal-overlay" *ngIf="showPendienteModal" (click)="cerrarModalPendiente()">
+    <div class="modal-content" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <h2>Marcar ticket como pendiente</h2>
+        <button class="close-btn" (click)="cerrarModalPendiente()">×</button>
+      </div>
+
+      <form [formGroup]="pendingForm" (ngSubmit)="guardarPendiente()">
+        <div class="form-group">
+          <label for="motivoPendiente">Describe el motivo</label>
+          <textarea
+            id="motivoPendiente"
+            formControlName="motivo"
+            class="form-control"
+            rows="4"
+            placeholder="Ejemplo: Esperando confirmación del proveedor"
+          ></textarea>
+          <div class="error-message" *ngIf="pendingForm.get('motivo')?.invalid && pendingForm.get('motivo')?.touched">
+            *Este campo es obligatorio (máximo 500 caracteres)
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="tiempoPendiente">Tiempo estimado para retomar</label>
+          <input
+            id="tiempoPendiente"
+            type="text"
+            class="form-control"
+            formControlName="tiempoEstimado"
+            placeholder="Ejemplo: 4 horas"
+          />
+          <div class="error-message" *ngIf="pendingForm.get('tiempoEstimado')?.invalid && pendingForm.get('tiempoEstimado')?.touched">
+            *Indica el tiempo estimado (máximo 100 caracteres)
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="cancel-btn" (click)="cerrarModalPendiente()" [disabled]="isLoading">
+            Cancelar
+          </button>
+          <button type="submit" class="submit-btn" [disabled]="pendingForm.invalid || isLoading">
+            <span *ngIf="!isLoading">Guardar como pendiente</span>
+            <span *ngIf="isLoading">Guardando...</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal de escalamiento -->
+  <div class="modal-overlay" *ngIf="showEscalateModal" (click)="cerrarEscalamiento()">
+    <div class="modal-content" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <h2>Escalar ticket</h2>
+        <button class="close-btn" (click)="cerrarEscalamiento()">×</button>
+      </div>
+
+      <form [formGroup]="escalateForm" (ngSubmit)="escalarTicket()">
+
+        <div class="form-group">
+          <label for="tecnicoDestino">Seleccionar técnico destino</label>
+          <select
+            id="tecnicoDestino"
+            formControlName="tecnicoDestino"
+            class="form-control"
+            [disabled]="isLoadingTechnicians">
+            <option value="">Selecciona un técnico...</option>
+            <option *ngFor="let tech of technicians" [value]="tech.id">
+              {{ tech.nombre }} ({{ tech.correo }})
+            </option>
+          </select>
+          <div *ngIf="isLoadingTechnicians" class="loading-technicians">
+            Cargando técnicos...
+          </div>
+          <div *ngIf="escalateForm.get('tecnicoDestino')?.invalid && escalateForm.get('tecnicoDestino')?.touched" class="error-message">
+            *Debes seleccionar un técnico
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label for="motivoEscalamiento">Motivo de escalamiento</label>
+          <textarea
+            id="motivoEscalamiento"
+            formControlName="motivoEscalamiento"
+            class="form-control"
+            rows="4"
+            placeholder="Describe el motivo del escalamiento...">
+          </textarea>
+          <div *ngIf="escalateForm.get('motivoEscalamiento')?.invalid && escalateForm.get('motivoEscalamiento')?.touched" class="error-message">
+            *Este campo es obligatorio
+          </div>
+        </div>
+
+        <div class="form-actions">
+          <button type="button" class="cancel-btn" (click)="cerrarEscalamiento()">Cancelar</button>
+          <button type="submit" class="submit-btn" [disabled]="escalateForm.invalid || isLoading || isLoadingTechnicians">
+            <span *ngIf="!isLoading">Escalar</span>
+            <span *ngIf="isLoading">Escalando...</span>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Modal de confirmación -->
+  <div class="modal-overlay confirm-modal-overlay" *ngIf="showConfirmModal" (click)="cerrarModalConfirmacion()">
+    <div class="modal-content confirm-modal-content" (click)="$event.stopPropagation()">
+      <div class="confirm-modal-header">
+        <h2>{{ confirmTitle }}</h2>
+        <button class="close-btn" (click)="cerrarModalConfirmacion()">×</button>
+      </div>
+      <div class="confirm-modal-body">
+        <p>{{ confirmMessage }}</p>
+      </div>
+      <div class="confirm-modal-actions">
+        <button class="cancel-btn" (click)="cerrarModalConfirmacion()">Cancelar</button>
+        <button class="confirm-btn" (click)="confirmarCambioEstado()" [disabled]="isLoading">
+          <span *ngIf="!isLoading">Aceptar</span>
+          <span *ngIf="isLoading">Procesando...</span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de éxito -->
+  <div class="modal-overlay success-modal-overlay" *ngIf="showSuccessModal" (click)="cerrarSuccessModal()">
+    <div class="modal-content success-modal-content" (click)="$event.stopPropagation()">
+      <div class="success-modal-header">
+        <div class="success-icon">✓</div>
+        <h2>¡Éxito!</h2>
+      </div>
+      <div class="success-modal-body">
+        <p>{{ successMessage }}</p>
+      </div>
+      <div class="success-modal-actions">
+        <button class="success-ok-btn" (click)="cerrarSuccessModal()">Aceptar</button>
+      </div>
+    </div>
+  </div>
+</div>
+
