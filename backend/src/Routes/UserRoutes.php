@@ -79,6 +79,8 @@ class UserRoutes
         $correo = $body['correo'] ?? '';
         $rol = $body['rol'] ?? 'empleado';
         $password = $body['password'] ?? '';
+        $departamento = $body['departamento'] ?? '';
+        $numEmpleado = $body['num_empleado'] ?? '';
 
         if (empty($nombre) || empty($correo) || empty($password)) {
             AuthMiddleware::sendError('Todos los campos son requeridos', 400);
@@ -88,11 +90,36 @@ class UserRoutes
             $hashedPassword = password_hash($password, PASSWORD_DEFAULT);
 
             $this->db->query(
-                'INSERT INTO usuarios (nombre, correo, password, rol, estatus) VALUES (?, ?, ?, ?, "Activo")',
-                [$nombre, $correo, $hashedPassword, $rol]
+                'INSERT INTO usuarios (nombre, correo, password, rol, estatus, departamento, num_empleado) VALUES (?, ?, ?, ?, "Activo", ?, ?)',
+                [$nombre, $correo, $hashedPassword, $rol, $departamento, $numEmpleado]
             );
 
-            AuthMiddleware::sendResponse(['message' => 'Usuario creado exitosamente'], 201);
+            $userId = $this->db->lastInsertId();
+
+            // Obtener el usuario creado
+            $stmt = $this->db->query(
+                'SELECT id_usuario as id, nombre, correo, rol, departamento, estatus, num_empleado FROM usuarios WHERE id_usuario = ?',
+                [$userId]
+            );
+
+            $newUser = $stmt->fetch();
+
+            // Mapear al formato que espera el frontend
+            $nameParts = explode(' ', $newUser['nombre']);
+            $userResponse = [
+                'id' => $newUser['id'],
+                'num_empleado' => $newUser['num_empleado'] ?? null,
+                'nombre' => $newUser['nombre'],
+                'apellido' => $nameParts[1] ?? '',
+                'departamento' => $newUser['departamento'] ?? '',
+                'correo' => $newUser['correo'],
+                'rol' => strtolower($newUser['rol']),
+                'activo' => $newUser['estatus'] === 'Activo',
+                'password_temporal' => false,
+                'fechaCreacion' => date('c')
+            ];
+
+            AuthMiddleware::sendResponse(['message' => 'Usuario creado exitosamente', 'user' => $userResponse], 201);
         } catch (\Exception $e) {
             error_log('Error creating user: ' . $e->getMessage());
             AuthMiddleware::sendError('Error interno del servidor', 500);

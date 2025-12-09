@@ -112,18 +112,25 @@ export class UserService {
       activo: true
     };
 
+    console.log('📤 UserService - Enviando request:', requestData);
+    console.log('📤 UserService - URL:', `${ApiConfig.API_BASE_URL}/users`);
+
     return this.http.post<{message: string, user: any}>(`${ApiConfig.API_BASE_URL}/users`, requestData)
       .pipe(
         map(response => {
+          console.log('✅ UserService - Respuesta del backend:', response);
           // Mapear el usuario del backend al formato del frontend
           const mappedUser = this.mapBackendUserToFrontend(response.user);
+          console.log('✅ UserService - Usuario mapeado:', mappedUser);
           // Agregar usuario a la lista local sin recargar toda la lista
           this.addUserToList(mappedUser);
           return mappedUser;
         }),
         catchError(error => {
-          console.error('Error creando usuario:', error);
-          return throwError(() => new Error(error.error?.error || 'Error al crear el usuario'));
+          console.error('❌ UserService - Error creando usuario:', error);
+          console.error('❌ UserService - Status:', error.status);
+          console.error('❌ UserService - Error completo:', JSON.stringify(error, null, 2));
+          return throwError(() => new Error(error.error?.error || error.message || 'Error al crear el usuario'));
         })
       );
   }

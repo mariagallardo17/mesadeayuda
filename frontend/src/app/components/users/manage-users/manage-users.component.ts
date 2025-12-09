@@ -271,14 +271,29 @@ export class ManageUsersComponent implements OnInit, OnDestroy {
   }
 
   onSubmitAddUser(): void {
+    console.log('🔍 onSubmitAddUser llamado');
+    console.log('📋 Formulario válido:', this.addUserForm.valid);
+    console.log('📋 Valores del formulario:', this.addUserForm.value);
+    console.log('📋 Errores del formulario:', this.addUserForm.errors);
+    
+    // Mostrar errores de cada campo
+    Object.keys(this.addUserForm.controls).forEach(key => {
+      const control = this.addUserForm.get(key);
+      if (control && control.invalid) {
+        console.log(`❌ Campo ${key} inválido:`, control.errors);
+      }
+    });
+
     if (this.addUserForm.valid) {
       this.isLoading = true;
       const userData: CreateUserRequest = this.addUserForm.value;
+      console.log('📤 Enviando datos al backend:', userData);
 
       this.userService.createUser(userData)
         .pipe(takeUntil(this.destroy$))
         .subscribe({
           next: (newUser) => {
+            console.log('✅ Usuario creado exitosamente:', newUser);
             this.successMessage = `Usuario ${newUser.nombre} creado exitosamente`;
             this.showSuccessModal = true;
             this.hideForms();
@@ -286,12 +301,15 @@ export class ManageUsersComponent implements OnInit, OnDestroy {
             this.isLoading = false;
           },
           error: (error) => {
-            this.errorMessage = error.message || 'Error al crear el usuario';
+            console.error('❌ Error al crear usuario:', error);
+            console.error('❌ Detalles del error:', error.error);
+            this.errorMessage = error.error?.error || error.message || 'Error al crear el usuario';
             this.showErrorModal = true;
             this.isLoading = false;
           }
         });
     } else {
+      console.log('❌ Formulario inválido, no se puede enviar');
       this.errorMessage = 'Por favor, complete todos los campos correctamente';
       this.showErrorModal = true;
     }
