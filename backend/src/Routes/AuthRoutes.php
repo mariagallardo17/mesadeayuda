@@ -335,14 +335,21 @@ class AuthRoutes
                 error_log("❌ Error enviando correo de recuperación a {$user['correo']}: $errorMessage");
                 error_log("❌ Detalles del error SMTP: " . $e->getTraceAsString());
                 
-                // Verificar si el error contiene información sensible y limpiarla
-                $cleanError = $errorMessage;
-                if (strpos($errorMessage, 'SMTP_USER') !== false || strpos($errorMessage, 'SMTP_PASS') !== false) {
-                    $cleanError = "Error de configuración SMTP. Verifica las credenciales en el servidor.";
+                // Obtener información detallada del error si está disponible
+                $detailedError = isset($e->detailedError) ? $e->detailedError : null;
+                
+                // Crear mensaje de error más útil
+                $userMessage = $errorMessage;
+                
+                // Si es un error de autenticación, dar instrucciones específicas
+                if ($detailedError && $detailedError['error_type'] === 'authentication') {
+                    $userMessage = "Error de autenticación con el servidor de correo. Por favor, contacta al administrador para verificar la configuración SMTP. Si usas Gmail, asegúrate de usar una contraseña de aplicación.";
+                } elseif ($detailedError && $detailedError['error_type'] === 'connection') {
+                    $userMessage = "No se pudo conectar al servidor de correo. Por favor, contacta al administrador.";
                 }
                 
                 // Devolver error al usuario con información útil pero segura
-                AuthMiddleware::sendError($cleanError, 500);
+                AuthMiddleware::sendError($userMessage, 500);
             }
             
         } catch (\Exception $e) {
@@ -467,9 +474,11 @@ class AuthRoutes
                 $result['suggestions'][] = "Error de autenticación. Verifica que SMTP_USER y SMTP_PASS sean correctos.";
                 $result['suggestions'][] = "Si usas Gmail, asegúrate de usar una contraseña de aplicación, no tu contraseña normal.";
                 $result['suggestions'][] = "Genera una contraseña de aplicación en: https://myaccount.google.com/apppasswords";
-            } elseif (strpos($errorInfo, 'connection') !== false || strpos($errorInfo, 'timeout') !== false) {
-                $result['suggestions'][] = "Error de conexión. Verifica que SMTP_HOST y SMTP_PORT sean correctos.";
-                $result['suggestions'][] = "Verifica que el servidor SMTP esté accesible desde tu servidor.";
+            } elseif (strpos($errorInfo, 'connection') !== false || strpos($errorInfo, 'timeout') !== false || strpos($errorInfo, 'could not connect') !== false) {
+                $result['suggestions'][] = "Error de conexión con el servidor SMTP.";
+                $result['suggestions'][] = "Tu hosting puede estar bloqueando los puertos SMTP salientes (465 o 587).";
+                $result['suggestions'][] = "Contacta a tu proveedor de hosting para verificar si los puertos SMTP están abiertos.";
+                $result['suggestions'][] = "Si tu hosting bloquea SMTP, considera usar un servicio de correo externo como SendGrid o Mailgun.";
             } else {
                 $result['suggestions'][] = "Revisa los logs del servidor (error.log) para más detalles.";
                 $result['suggestions'][] = "Verifica la configuración SMTP en el archivo .env";

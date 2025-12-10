@@ -29,18 +29,34 @@ class EmailService
         $this->mailer->SMTPAuth = true;
         $this->mailer->Username = $cleanEnv('SMTP_USER', '');
         $this->mailer->Password = $cleanEnv('SMTP_PASS', '');
-        $this->mailer->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
-        $this->mailer->Port = (int)($cleanEnv('SMTP_PORT', '587'));
+
+        // Determinar el tipo de encriptación según el puerto
+        $smtpPort = (int)($cleanEnv('SMTP_PORT', '587'));
+        $this->mailer->Port = $smtpPort;
+
+        // Configurar encriptación según el puerto
+        if ($smtpPort == 465) {
+            // Puerto 465 usa SSL
+            $this->mailer->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
+        } else {
+            // Puerto 587 usa STARTTLS
+            $this->mailer->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+        }
+
         $this->mailer->CharSet = 'UTF-8';
 
-        // Configuraciones adicionales para Gmail
+        // Configuraciones adicionales para conexiones SSL/TLS más flexibles
         $this->mailer->SMTPOptions = [
             'ssl' => [
                 'verify_peer' => false,
                 'verify_peer_name' => false,
-                'allow_self_signed' => true
+                'allow_self_signed' => true,
+                'crypto_method' => STREAM_CRYPTO_METHOD_TLS_CLIENT
             ]
         ];
+
+        // Timeout más largo para conexiones lentas
+        $this->mailer->Timeout = 30;
 
         // Habilitar debug si está configurado o si hay problemas
         $debugLevel = isset($_ENV['SMTP_DEBUG']) && $_ENV['SMTP_DEBUG'] === 'true' ? 2 : 0;
@@ -111,7 +127,7 @@ class EmailService
             $this->mailer->AltBody = strip_tags($htmlBody);
 
             error_log("📤 Intentando enviar correo a: $to");
-            error_log("📤 Configuración SMTP: Host={$this->mailer->Host}, Port={$this->mailer->Port}, User={$this->mailer->Username}, Secure={$this->mailer->SMTPSecure}");
+            error_log("📤 Configuración SMTP: Host={$this->mailer->Host}, Port={$this->mailer->Port}, User={$this->mailer->Username}, Secure={$this->mailer->SMTPSecure}, Timeout={$this->mailer->Timeout}");
 
             // Habilitar debug temporalmente para capturar errores
             if ($enableDebug || isset($_ENV['SMTP_DEBUG']) && $_ENV['SMTP_DEBUG'] === 'true') {
@@ -145,10 +161,47 @@ class EmailService
             error_log("❌ Exception: " . $e->getMessage());
             error_log("❌ Stack trace: " . $e->getTraceAsString());
 
+            // Capturar información detallada del error SMTP
+            $detailedError = $this->getDetailedSMTPError($errorInfo, $e->getMessage());
+
             // Proporcionar un mensaje más útil
             $userFriendlyError = $this->getUserFriendlyError($errorInfo, $e->getMessage());
-            throw new \Exception($userFriendlyError);
+
+            // Lanzar excepción con información detallada
+            $exception = new \Exception($userFriendlyError);
+            $exception->detailedError = $detailedError;
+            throw $exception;
         }
+    }
+
+    private function getDetailedSMTPError($errorInfo, $exceptionMsg)
+    {
+        $details = [
+            'raw_error' => $errorInfo,
+            'exception' => $exceptionMsg,
+            'error_code' => null,
+            'error_type' => 'unknown'
+        ];
+
+        // Buscar códigos de error comunes
+        if (preg_match('/\b(\d{3})\b/', $errorInfo, $matches)) {
+            $details['error_code'] = $matches[1];
+        }
+
+        $lowerError = strtolower($errorInfo . ' ' . $exceptionMsg);
+
+        if (strpos($lowerError, 'authentication failed') !== false || strpos($lowerError, '535') !== false || strpos($lowerError, '534') !== false) {
+            $details['error_type'] = 'authentication';
+            $details['suggestion'] = 'Verifica SMTP_USER y SMTP_PASS. Si usas Gmail, usa una contraseña de aplicación.';
+        } elseif (strpos($lowerError, 'connection') !== false || strpos($lowerError, 'timeout') !== false || strpos($lowerError, 'could not connect') !== false) {
+            $details['error_type'] = 'connection';
+            $details['suggestion'] = 'Verifica SMTP_HOST y SMTP_PORT. El servidor puede estar bloqueado o inaccesible.';
+        } elseif (strpos($lowerError, 'could not instantiate mail function') !== false) {
+            $details['error_type'] = 'server';
+            $details['suggestion'] = 'Error del servidor. Contacta al administrador.';
+        }
+
+        return $details;
     }
 
     private function getUserFriendlyError($errorInfo, $exceptionMsg)
@@ -156,20 +209,33 @@ class EmailService
         // Analizar el error y proporcionar mensajes más útiles
         $lowerError = strtolower($errorInfo . ' ' . $exceptionMsg);
 
-        if (strpos($lowerError, 'authentication failed') !== false || strpos($lowerError, '535') !== false) {
-            return "Error de autenticación SMTP. Verifica que SMTP_USER y SMTP_PASS sean correctos. Si usas Gmail, asegúrate de usar una contraseña de aplicación, no tu contraseña normal.";
+        if (strpos($lowerError, 'authentication failed') !== false || strpos($lowerError, '535') !== false || strpos($lowerError, '534') !== false) {
+            return "Error de autenticación SMTP. Verifica que SMTP_USER y SMTP_PASS sean correctos. Si usas Gmail, asegúrate de usar una contraseña de aplicación (no tu contraseña normal). Genera una en: https://myaccount.google.com/apppasswords";
         }
 
-        if (strpos($lowerError, 'connection') !== false || strpos($lowerError, 'timeout') !== false) {
-            return "Error de conexión con el servidor SMTP. Verifica que SMTP_HOST y SMTP_PORT sean correctos y que el servidor esté accesible.";
+        if (strpos($lowerError, 'connection') !== false || strpos($lowerError, 'timeout') !== false || strpos($lowerError, 'could not connect') !== false || strpos($lowerError, 'stream_socket_client') !== false) {
+            $currentPort = $this->mailer->Port ?? 'desconocido';
+            $currentHost = $this->mailer->Host ?? 'desconocido';
+            $suggestion = "Error de conexión con el servidor SMTP ({$currentHost}:{$currentPort}). ";
+            $suggestion .= "Posibles soluciones:\n";
+            $suggestion .= "1. El hosting puede estar bloqueando el puerto {$currentPort} - contacta a tu proveedor\n";
+            if ($currentPort == 465) {
+                $suggestion .= "2. Si estás usando puerto 465, intenta cambiar a 587 con STARTTLS\n";
+            } else {
+                $suggestion .= "2. Si estás usando puerto 587, intenta cambiar a 465 con SSL\n";
+            }
+            $suggestion .= "3. Algunos hostings bloquean TODAS las conexiones SMTP salientes\n";
+            $suggestion .= "4. Considera usar un servicio de correo externo (SendGrid, Mailgun) si tu hosting bloquea SMTP";
+            return $suggestion;
         }
 
         if (strpos($lowerError, 'could not instantiate mail function') !== false) {
             return "Error del servidor de correo. Contacta al administrador del sistema.";
         }
 
-        // Mensaje genérico con información del error
-        return "No se pudo enviar el correo. Error: " . ($errorInfo ?: $exceptionMsg);
+        // Mensaje genérico con información del error (limitado para no exponer demasiado)
+        $shortError = substr($errorInfo ?: $exceptionMsg, 0, 200);
+        return "No se pudo enviar el correo. Error técnico: " . $shortError . " (Revisa la configuración SMTP en el servidor)";
     }
 
     public function sendTicketAssignedNotification($ticket, $technician, $employee)
