@@ -27,6 +27,7 @@ class AuthRoutes
         $this->router->addRoute('POST', '/auth/change-temporary-password', [$this, 'changeTemporaryPassword']);
         $this->router->addRoute('POST', '/auth/forgot-password', [$this, 'forgotPassword']);
         $this->router->addRoute('GET', '/auth/profile', [$this, 'getProfile']);
+        $this->router->addRoute('GET', '/auth/test-smtp', [$this, 'testSMTP']);
     }
     
     public function login()
@@ -48,10 +49,10 @@ class AuthRoutes
         }
         
         try {
-            // Find user in database
+            // Find user in database (first check if user exists, then check status)
             $stmt = $this->db->query(
                 'SELECT id_usuario, correo, password, rol, nombre, password_temporal, num_empleado, departamento, estatus 
-                 FROM usuarios WHERE correo = ? AND estatus = "Activo"',
+                 FROM usuarios WHERE correo = ?',
                 [$correo]
             );
             
@@ -61,6 +62,13 @@ class AuthRoutes
                 $elapsed = (microtime(true) - $startTime) * 1000;
                 error_log("Login fallido - Usuario no encontrado: $correo ({$elapsed}ms)");
                 AuthMiddleware::sendError('Credenciales inválidas', 401);
+            }
+            
+            // Check if user is active
+            if ($user['estatus'] !== 'Activo') {
+                $elapsed = (microtime(true) - $startTime) * 1000;
+                error_log("Login fallido - Usuario inactivo: $correo (estatus: {$user['estatus']}) ({$elapsed}ms)");
+                AuthMiddleware::sendError('Tu cuenta está inactiva. Contacta al administrador.', 403);
             }
             
             // Verify password
@@ -292,24 +300,50 @@ class AuthRoutes
                 [$hashedPassword, $user['id_usuario']]
             );
             
-            // Send email in background (async simulation)
+            // Send email
             $emailService = new EmailService();
             $baseUrl = $_ENV['FRONTEND_URL'] ?? 'http://localhost:4200';
             $loginUrl = "$baseUrl/login";
             
             $html = $this->generatePasswordRecoveryEmail($user['nombre'], $nuevaPassword, $loginUrl);
             
-            // Send email (non-blocking)
-            try {
-                $emailService->sendEmail($user['correo'], 'Recuperación de contraseña - Mesa de Ayuda', $html);
-                error_log("📧 Correo de recuperación enviado a {$user['correo']}");
-            } catch (\Exception $e) {
-                error_log("❌ Error enviando correo de recuperación: " . $e->getMessage());
+            // Validar configuración SMTP antes de intentar enviar
+            $smtpUser = $_ENV['SMTP_USER'] ?? '';
+            $smtpPass = $_ENV['SMTP_PASS'] ?? '';
+            $smtpHost = $_ENV['SMTP_HOST'] ?? '';
+            
+            if (empty($smtpUser) || empty($smtpPass) || empty($smtpHost)) {
+                error_log("❌ Configuración SMTP incompleta - SMTP_USER: " . (empty($smtpUser) ? 'VACÍO' : 'OK') . ", SMTP_PASS: " . (empty($smtpPass) ? 'VACÍO' : 'OK') . ", SMTP_HOST: " . (empty($smtpHost) ? 'VACÍO' : 'OK'));
+                // Aún así devolver éxito para no revelar información, pero loguear el error
+                AuthMiddleware::sendResponse([
+                    'message' => 'Se ha generado una contraseña temporal. Por favor, contacta al administrador si no recibes el correo.',
+                    'warning' => 'La configuración de correo no está completa. Contacta al administrador.'
+                ]);
+                return;
             }
             
-            AuthMiddleware::sendResponse([
-                'message' => 'Se ha enviado una contraseña temporal a su correo. Revíselo e inicie sesión para cambiar la contraseña.'
-            ]);
+            // Send email
+            try {
+                $emailService->sendEmail($user['correo'], 'Recuperación de contraseña - Mesa de Ayuda', $html);
+                error_log("📧 Correo de recuperación enviado exitosamente a {$user['correo']}");
+                
+                AuthMiddleware::sendResponse([
+                    'message' => 'Se ha enviado una contraseña temporal a su correo. Revíselo e inicie sesión para cambiar la contraseña.'
+                ]);
+            } catch (\Exception $e) {
+                $errorMessage = $e->getMessage();
+                error_log("❌ Error enviando correo de recuperación a {$user['correo']}: $errorMessage");
+                error_log("❌ Detalles del error SMTP: " . $e->getTraceAsString());
+                
+                // Verificar si el error contiene información sensible y limpiarla
+                $cleanError = $errorMessage;
+                if (strpos($errorMessage, 'SMTP_USER') !== false || strpos($errorMessage, 'SMTP_PASS') !== false) {
+                    $cleanError = "Error de configuración SMTP. Verifica las credenciales en el servidor.";
+                }
+                
+                // Devolver error al usuario con información útil pero segura
+                AuthMiddleware::sendError($cleanError, 500);
+            }
             
         } catch (\Exception $e) {
             error_log('Error en recuperación de contraseña: ' . $e->getMessage());
@@ -357,6 +391,92 @@ class AuthRoutes
         }
         
         return ['valid' => true];
+    }
+    
+    public function testSMTP()
+    {
+        // Endpoint de prueba SMTP - accesible sin autenticación para diagnóstico
+        // En producción, podrías querer agregar una validación simple
+        
+        header('Content-Type: application/json');
+        
+        // Helper para limpiar variables de entorno
+        $cleanEnv = function($key, $default = '') {
+            $value = $_ENV[$key] ?? $default;
+            if (is_string($value) && strlen($value) > 0) {
+                if (($value[0] === '"' && substr($value, -1) === '"') || ($value[0] === "'" && substr($value, -1) === "'")) {
+                    $value = substr($value, 1, -1);
+                }
+            }
+            return trim($value);
+        };
+        
+        $smtpHost = $cleanEnv('SMTP_HOST', 'smtp.gmail.com');
+        $smtpPort = (int)$cleanEnv('SMTP_PORT', '587');
+        $smtpUser = $cleanEnv('SMTP_USER', '');
+        $smtpPass = $cleanEnv('SMTP_PASS', '');
+        $smtpFrom = $cleanEnv('SMTP_FROM', '');
+        
+        $result = [
+            'status' => 'testing',
+            'config' => [
+                'host' => $smtpHost,
+                'port' => $smtpPort,
+                'user' => $smtpUser,
+                'pass_configured' => !empty($smtpPass),
+                'from' => $smtpFrom ?: 'No configurado'
+            ],
+            'errors' => [],
+            'debug' => []
+        ];
+        
+        // Validar configuración básica
+        if (empty($smtpUser) || empty($smtpPass)) {
+            $result['status'] = 'error';
+            $result['errors'][] = 'SMTP_USER o SMTP_PASS no están configurados';
+            AuthMiddleware::sendResponse($result, 400);
+            return;
+        }
+        
+        try {
+            $emailService = new EmailService();
+            
+            // Intentar enviar un correo de prueba al mismo usuario
+            $testEmail = $smtpUser;
+            $testSubject = 'Prueba de configuración SMTP - Mesa de Ayuda';
+            $testBody = '<h1>Prueba de Correo</h1><p>Si recibes este correo, la configuración SMTP está funcionando correctamente.</p><p>Fecha: ' . date('Y-m-d H:i:s') . '</p>';
+            
+            $result['debug'][] = "Intentando enviar correo de prueba a: $testEmail";
+            
+            $emailService->sendEmail($testEmail, $testSubject, $testBody);
+            
+            $result['status'] = 'success';
+            $result['message'] = "Correo de prueba enviado exitosamente a $testEmail. Revisa tu bandeja de entrada.";
+            $result['debug'][] = "Correo enviado correctamente";
+            
+            AuthMiddleware::sendResponse($result);
+            
+        } catch (\Exception $e) {
+            $result['status'] = 'error';
+            $result['errors'][] = $e->getMessage();
+            $result['debug'][] = "Excepción capturada: " . $e->getTraceAsString();
+            
+            // Intentar obtener más información del error
+            $errorInfo = $e->getMessage();
+            if (strpos($errorInfo, 'authentication') !== false || strpos($errorInfo, '535') !== false) {
+                $result['suggestions'][] = "Error de autenticación. Verifica que SMTP_USER y SMTP_PASS sean correctos.";
+                $result['suggestions'][] = "Si usas Gmail, asegúrate de usar una contraseña de aplicación, no tu contraseña normal.";
+                $result['suggestions'][] = "Genera una contraseña de aplicación en: https://myaccount.google.com/apppasswords";
+            } elseif (strpos($errorInfo, 'connection') !== false || strpos($errorInfo, 'timeout') !== false) {
+                $result['suggestions'][] = "Error de conexión. Verifica que SMTP_HOST y SMTP_PORT sean correctos.";
+                $result['suggestions'][] = "Verifica que el servidor SMTP esté accesible desde tu servidor.";
+            } else {
+                $result['suggestions'][] = "Revisa los logs del servidor (error.log) para más detalles.";
+                $result['suggestions'][] = "Verifica la configuración SMTP en el archivo .env";
+            }
+            
+            AuthMiddleware::sendResponse($result, 500);
+        }
     }
     
     private function generatePasswordRecoveryEmail($nombre, $password, $loginUrl)

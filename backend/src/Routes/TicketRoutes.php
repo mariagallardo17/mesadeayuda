@@ -133,13 +133,33 @@ class TicketRoutes
     public function createTicket()
     {
         $user = AuthMiddleware::authenticate();
-        $body = AuthMiddleware::getRequestBody();
+        
+        // Manejar FormData (multipart/form-data) o JSON
+        $body = [];
+        if ($_SERVER['CONTENT_TYPE'] && strpos($_SERVER['CONTENT_TYPE'], 'multipart/form-data') !== false) {
+            // Si es FormData, usar $_POST
+            $body = $_POST;
+        } else {
+            // Si es JSON, usar getRequestBody
+            $body = AuthMiddleware::getRequestBody();
+        }
         
         $categoria = trim($body['categoria'] ?? '');
         $subcategoria = trim($body['subcategoria'] ?? '');
         $descripcion = trim($body['descripcion'] ?? '');
         
+        // Log para depuración
+        error_log('Datos recibidos en createTicket: ' . json_encode([
+            'categoria' => $categoria,
+            'subcategoria' => $subcategoria,
+            'descripcion_length' => strlen($descripcion),
+            'content_type' => $_SERVER['CONTENT_TYPE'] ?? 'unknown',
+            'post_data' => $_POST,
+            'body_data' => $body
+        ]));
+        
         if (empty($categoria) || empty($subcategoria) || empty($descripcion)) {
+            error_log('Error de validación: campos vacíos - categoria: ' . ($categoria ?: 'vacío') . ', subcategoria: ' . ($subcategoria ?: 'vacío') . ', descripcion: ' . (strlen($descripcion) > 0 ? 'tiene contenido' : 'vacío'));
             AuthMiddleware::sendError('Todos los campos obligatorios deben ser completados', 400);
         }
         
