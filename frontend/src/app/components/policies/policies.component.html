@@ -1,0 +1,41 @@
+<div class="policies-container">
+  <!-- Header -->
+  <div class="policies-header">
+    <h1>Políticas del Sistema</h1>
+    <p>Conoce las reglas y políticas que rigen el uso de la mesa de ayuda</p>
+  </div>
+
+  <!-- Lista de políticas -->
+  <div class="policies-list">
+    <div
+      *ngFor="let policy of policies; let i = index"
+      class="policy-item">
+
+      <div class="policy-number">{{ i + 1 }}</div>
+
+      <div class="policy-content">
+        <h3 class="policy-title">{{ policy.title }}</h3>
+        <p class="policy-description">{{ policy.description }}</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mensaje cuando no hay políticas -->
+  <div *ngIf="policies.length === 0" class="no-policies">
+    <i class="fas fa-info-circle"></i>
+    <h3>No hay políticas disponibles</h3>
+    <p>Las políticas del sistema se cargarán próximamente.</p>
+  </div>
+
+  <!-- Footer informativo -->
+  <div class="policies-footer">
+    <div class="footer-content">
+      <i class="fas fa-shield-alt"></i>
+      <div class="footer-text">
+        <h4>Cumplimiento Obligatorio</h4>
+        <p>Todas las políticas son de cumplimiento obligatorio para todos los usuarios del sistema.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
