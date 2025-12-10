@@ -549,59 +549,13 @@ export class NewTicketComponent implements OnInit, OnDestroy {
   }
 
   private proceedWithSubmission(): void {
-    // Habilitar temporalmente los campos deshabilitados para la validación
-    const correoControl = this.ticketForm.get('correo');
-    const departamentoControl = this.ticketForm.get('departamento');
-    const wasCorreoDisabled = correoControl?.disabled;
-    const wasDepartamentoDisabled = departamentoControl?.disabled;
-    
-    if (wasCorreoDisabled) {
-      correoControl?.enable({ emitEvent: false });
-    }
-    if (wasDepartamentoDisabled) {
-      departamentoControl?.enable({ emitEvent: false });
-    }
-
-    // Validar el formulario
     if (this.ticketForm.invalid) {
-      console.error('❌ Formulario inválido:', {
-        categoria: this.categoria?.value,
-        categoriaErrors: this.categoria?.errors,
-        subcategoria: this.subcategoria?.value,
-        subcategoriaErrors: this.subcategoria?.errors,
-        descripcion: this.descripcion?.value,
-        descripcionErrors: this.descripcion?.errors,
-        archivoAprobacion: this.archivoAprobacion?.value,
-        archivoAprobacionErrors: this.archivoAprobacion?.errors,
-        requiereAprobacion: this.requiereAprobacion,
-        formErrors: this.getFormValidationErrors()
-      });
-      
       this.ticketForm.markAllAsTouched();
-      
-      // Restaurar el estado de los campos
-      if (wasCorreoDisabled) {
-        correoControl?.disable({ emitEvent: false });
-      }
-      if (wasDepartamentoDisabled) {
-        departamentoControl?.disable({ emitEvent: false });
-      }
-      
       alert('Por favor, revisa los campos obligatorios antes de continuar.');
       return;
     }
 
     const rawData = this.ticketForm.getRawValue();
-    console.log('✅ Datos del formulario:', rawData);
-    
-    // Restaurar el estado de los campos
-    if (wasCorreoDisabled) {
-      correoControl?.disable({ emitEvent: false });
-    }
-    if (wasDepartamentoDisabled) {
-      departamentoControl?.disable({ emitEvent: false });
-    }
-    
     this.pendingTicketData = {
       categoria: rawData.categoria,
       subcategoria: rawData.subcategoria,
@@ -759,21 +713,10 @@ export class NewTicketComponent implements OnInit, OnDestroy {
   }
 
 
-  get correo() { return this.ticketForm.get('correo'); }
+  get email() { return this.ticketForm.get('email'); }
   get departamento() { return this.ticketForm.get('departamento'); }
   get categoria() { return this.ticketForm.get('categoria'); }
   get subcategoria() { return this.ticketForm.get('subcategoria'); }
   get descripcion() { return this.ticketForm.get('descripcion'); }
   get archivoAprobacion() { return this.ticketForm.get('archivoAprobacion'); }
-
-  private getFormValidationErrors(): any {
-    const errors: any = {};
-    Object.keys(this.ticketForm.controls).forEach(key => {
-      const control = this.ticketForm.get(key);
-      if (control && control.errors) {
-        errors[key] = control.errors;
-      }
-    });
-    return errors;
-  }
 }
