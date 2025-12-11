@@ -31,14 +31,110 @@ class UserRoutes
     {
         $user = AuthMiddleware::authenticate();
 
-        try {
-            $stmt = $this->db->query('SELECT id_usuario as id, nombre, correo, rol, departamento, estatus, num_empleado FROM usuarios ORDER BY nombre');
-            $users = $stmt->fetchAll();
+        // Verificar que el usuario sea administrador - verificar directamente en BD (más confiable)
+        $userId = $user['id_usuario'] ?? null;
+        
+        if (!$userId) {
+            error_log("❌ No se pudo obtener el ID del usuario del token");
+            AuthMiddleware::sendError('Error de autenticación', 401);
+        }
 
-            AuthMiddleware::sendResponse($users);
+        error_log("🔍 Verificando permisos para usuario ID: $userId");
+        error_log("🔍 Rol en JWT: '" . ($user['rol'] ?? 'NULL') . "'");
+        
+        // Verificar el rol directamente en la base de datos (más confiable que el JWT)
+        try {
+            $stmt = $this->db->query(
+                'SELECT rol FROM usuarios WHERE id_usuario = ?',
+                [$userId]
+            );
+            $dbUser = $stmt->fetch();
+            
+            if (!$dbUser) {
+                error_log("❌ Usuario no encontrado en BD con ID: $userId");
+                AuthMiddleware::sendError('Usuario no encontrado', 404);
+            }
+            
+            $dbRol = strtolower(trim($dbUser['rol'] ?? ''));
+            error_log("🔍 Rol en base de datos: '" . ($dbUser['rol'] ?? 'NULL') . "' (normalizado: '$dbRol')");
+            
+            // Verificar si es administrador (comparación flexible)
+            if ($dbRol !== 'administrador') {
+                error_log("❌ Acceso denegado - El usuario no es administrador.");
+                error_log("❌ Rol en BD: '" . ($dbUser['rol'] ?? 'NULL') . "' (normalizado: '$dbRol')");
+                AuthMiddleware::sendError('No tienes permisos para ver la lista de usuarios. Se requiere rol de administrador. Tu rol actual: ' . ($dbUser['rol'] ?? 'desconocido'), 403);
+            }
+            
+            error_log("✅ Usuario verificado como administrador en BD");
+            
         } catch (\Exception $e) {
-            error_log('Error getting users: ' . $e->getMessage());
-            AuthMiddleware::sendError('Error interno del servidor', 500);
+            error_log("❌ Error verificando permisos: " . $e->getMessage());
+            AuthMiddleware::sendError('Error al verificar permisos', 500);
+        }
+
+        error_log("✅ Obteniendo lista de usuarios...");
+
+        try {
+            // Consulta simple para obtener todos los usuarios (probar ambas variantes de nombre de tabla)
+            // En algunos servidores las tablas pueden estar en mayúsculas
+            $sql = 'SELECT id_usuario as id, nombre, correo, rol, departamento, estatus, num_empleado FROM usuarios ORDER BY nombre';
+            error_log("📝 Ejecutando SQL: $sql");
+            
+            // Verificar si la tabla existe
+            try {
+                $testStmt = $this->db->query('SHOW TABLES LIKE "usuarios"');
+                $tableExists = $testStmt->fetch();
+                if (!$tableExists) {
+                    // Intentar con mayúscula
+                    $testStmt = $this->db->query('SHOW TABLES LIKE "Usuarios"');
+                    $tableExists = $testStmt->fetch();
+                    if ($tableExists) {
+                        error_log("⚠️ Tabla encontrada como 'Usuarios' (mayúscula), ajustando consulta...");
+                        $sql = 'SELECT id_usuario as id, nombre, correo, rol, departamento, estatus, num_empleado FROM Usuarios ORDER BY nombre';
+                    }
+                }
+            } catch (\Exception $e) {
+                error_log("⚠️ No se pudo verificar nombre de tabla: " . $e->getMessage());
+            }
+            
+            $stmt = $this->db->query($sql);
+            $users = $stmt->fetchAll();
+            
+            error_log("📊 Usuarios encontrados en BD: " . count($users));
+            
+            if (count($users) === 0) {
+                error_log("⚠️ No se encontraron usuarios en la base de datos");
+                AuthMiddleware::sendResponse([]);
+                return;
+            }
+
+            // Formatear usuarios para el frontend (separar nombre y apellido)
+            $formattedUsers = [];
+            foreach ($users as $userData) {
+                $nameParts = explode(' ', $userData['nombre'], 2);
+                $formattedUser = [
+                    'id' => (int)$userData['id'],
+                    'num_empleado' => $userData['num_empleado'] ?? null,
+                    'nombre' => $nameParts[0] ?? $userData['nombre'],
+                    'apellido' => $nameParts[1] ?? '',
+                    'departamento' => $userData['departamento'] ?? '',
+                    'correo' => $userData['correo'],
+                    'rol' => strtolower(trim($userData['rol'] ?? 'empleado')),
+                    'activo' => ($userData['estatus'] ?? '') === 'Activo'
+                ];
+                $formattedUsers[] = $formattedUser;
+                error_log("👤 Usuario formateado: ID={$formattedUser['id']}, Nombre={$formattedUser['nombre']}, Rol={$formattedUser['rol']}");
+            }
+
+            error_log("✅ Usuarios formateados para envío: " . count($formattedUsers));
+            error_log("📤 Enviando respuesta JSON con " . count($formattedUsers) . " usuarios");
+            
+            // Enviar respuesta
+            AuthMiddleware::sendResponse($formattedUsers);
+        } catch (\Exception $e) {
+            error_log('❌ Error getting users: ' . $e->getMessage());
+            error_log('❌ Stack trace: ' . $e->getTraceAsString());
+            AuthMiddleware::sendError('Error interno del servidor: ' . $e->getMessage(), 500);
         }
     }
 
@@ -70,9 +166,42 @@ class UserRoutes
         $user = AuthMiddleware::authenticate();
         $body = AuthMiddleware::getRequestBody();
 
-        // Check admin permissions
-        if ($user['rol'] !== 'administrador') {
-            AuthMiddleware::sendError('No tienes permisos para crear usuarios', 403);
+        // Verificar permisos de administrador - verificar directamente en BD (más confiable)
+        $userId = $user['id_usuario'] ?? null;
+        
+        if (!$userId) {
+            error_log("❌ No se pudo obtener el ID del usuario del token");
+            AuthMiddleware::sendError('Error de autenticación', 401);
+        }
+
+        error_log("🔍 Verificando permisos para crear usuario - Usuario ID: $userId");
+        
+        // Verificar el rol directamente en la base de datos
+        try {
+            $stmt = $this->db->query(
+                'SELECT rol FROM usuarios WHERE id_usuario = ?',
+                [$userId]
+            );
+            $dbUser = $stmt->fetch();
+            
+            if (!$dbUser) {
+                error_log("❌ Usuario no encontrado en BD con ID: $userId");
+                AuthMiddleware::sendError('Usuario no encontrado', 404);
+            }
+            
+            $dbRol = strtolower(trim($dbUser['rol'] ?? ''));
+            error_log("🔍 Rol en base de datos: '" . ($dbUser['rol'] ?? 'NULL') . "' (normalizado: '$dbRol')");
+            
+            if ($dbRol !== 'administrador') {
+                error_log("❌ Acceso denegado - El usuario no es administrador.");
+                AuthMiddleware::sendError('No tienes permisos para crear usuarios. Se requiere rol de administrador.', 403);
+            }
+            
+            error_log("✅ Usuario verificado como administrador en BD");
+            
+        } catch (\Exception $e) {
+            error_log("❌ Error verificando permisos: " . $e->getMessage());
+            AuthMiddleware::sendError('Error al verificar permisos', 500);
         }
 
         $nombre = $body['nombre'] ?? '';
@@ -94,7 +223,7 @@ class UserRoutes
                 [$nombre, $correo, $hashedPassword, $rol, $departamento, $numEmpleado]
             );
 
-            $userId = $this->db->lastInsertId();
+            $userId = $this->db->getConnection()->lastInsertId();
 
             // Obtener el usuario creado
             $stmt = $this->db->query(

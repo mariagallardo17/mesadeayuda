@@ -22,8 +22,31 @@ use App\Config\Database;
 use App\Router;
 
 // Load environment variables
-$dotenv = Dotenv\Dotenv::createImmutable(__DIR__);
-$dotenv->safeLoad();
+// Intentar cargar desde múltiples ubicaciones posibles
+$envPaths = [
+    __DIR__,  // backend/
+    __DIR__ . '/api',  // backend/api/
+    dirname(__DIR__) . '/api',  // api/ (si está al mismo nivel que backend)
+];
+
+$envLoaded = false;
+foreach ($envPaths as $envPath) {
+    $envFile = $envPath . '/.env';
+    if (file_exists($envFile)) {
+        $dotenv = Dotenv\Dotenv::createImmutable($envPath);
+        $dotenv->safeLoad();
+        error_log("✅ Archivo .env cargado desde: $envPath");
+        $envLoaded = true;
+        break;
+    }
+}
+
+if (!$envLoaded) {
+    error_log("⚠️ Advertencia: No se encontró archivo .env en ninguna de las ubicaciones esperadas");
+    // Intentar cargar desde __DIR__ como fallback
+    $dotenv = Dotenv\Dotenv::createImmutable(__DIR__);
+    $dotenv->safeLoad();
+}
 
 // Set error reporting (desactivar en producción)
 error_reporting(E_ALL);

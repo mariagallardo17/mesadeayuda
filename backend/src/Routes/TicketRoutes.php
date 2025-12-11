@@ -4,6 +4,7 @@ namespace App\Routes;
 
 use App\Config\Database;
 use App\Middleware\AuthMiddleware;
+use App\Services\EmailService;
 
 class TicketRoutes
 {
@@ -133,13 +134,31 @@ class TicketRoutes
     public function createTicket()
     {
         $user = AuthMiddleware::authenticate();
-        $body = AuthMiddleware::getRequestBody();
         
-        $categoria = trim($body['categoria'] ?? '');
-        $subcategoria = trim($body['subcategoria'] ?? '');
-        $descripcion = trim($body['descripcion'] ?? '');
+        // Leer datos de FormData (multipart/form-data) o JSON
+        // Si es FormData, los datos vienen en $_POST, si es JSON viene en php://input
+        $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
         
+        if (strpos($contentType, 'multipart/form-data') !== false) {
+            // FormData - leer de $_POST
+            $categoria = trim($_POST['categoria'] ?? '');
+            $subcategoria = trim($_POST['subcategoria'] ?? '');
+            $descripcion = trim($_POST['descripcion'] ?? '');
+            $archivoAprobacion = $_FILES['archivoAprobacion'] ?? null;
+            error_log("📋 Datos recibidos desde FormData: categoria=$categoria, subcategoria=$subcategoria, descripcion=" . substr($descripcion, 0, 50) . "...");
+        } else {
+            // JSON - leer de php://input
+            $body = AuthMiddleware::getRequestBody();
+            $categoria = trim($body['categoria'] ?? '');
+            $subcategoria = trim($body['subcategoria'] ?? '');
+            $descripcion = trim($body['descripcion'] ?? '');
+            $archivoAprobacion = null;
+            error_log("📋 Datos recibidos desde JSON: categoria=$categoria, subcategoria=$subcategoria, descripcion=" . substr($descripcion, 0, 50) . "...");
+        }
+        
+        // Validar campos obligatorios
         if (empty($categoria) || empty($subcategoria) || empty($descripcion)) {
+            error_log("❌ Campos faltantes: categoria=" . (empty($categoria) ? 'VACÍO' : 'OK') . ", subcategoria=" . (empty($subcategoria) ? 'VACÍO' : 'OK') . ", descripcion=" . (empty($descripcion) ? 'VACÍO' : 'OK'));
             AuthMiddleware::sendError('Todos los campos obligatorios deben ser completados', 400);
         }
         
@@ -163,16 +182,173 @@ class TicketRoutes
             
             $prioridad = $servicio['prioridad'] ?? 'Media';
             
-            // Create ticket
+            // ASIGNACIÓN AUTOMÁTICA SEGÚN responsable_inicial DEL CATÁLOGO DE SERVICIOS
+            $tecnicoId = null;
+            $tecnicoNombre = null;
+            
+            error_log("═══════════════════════════════════════════════════════");
+            error_log("🔍 INICIANDO ASIGNACIÓN AUTOMÁTICA - Servicio ID: " . $servicio['id_servicio']);
+            error_log("═══════════════════════════════════════════════════════");
+            
+            // PASO 1: Obtener responsable_inicial del servicio
+            $stmtServicio = $this->db->query(
+                'SELECT responsable_inicial FROM servicios WHERE id_servicio = ?',
+                [$servicio['id_servicio']]
+            );
+            $servicioInfo = $stmtServicio->fetch();
+            
+            if ($servicioInfo && !empty($servicioInfo['responsable_inicial'])) {
+                $responsableInicial = trim($servicioInfo['responsable_inicial']);
+                error_log("📋 Responsable inicial del catálogo: '$responsableInicial'");
+                
+                // PASO 2: Listar TODOS los técnicos disponibles
+                $stmtAll = $this->db->query(
+                    'SELECT id_usuario, nombre, rol, estatus FROM usuarios 
+                     WHERE (rol = "tecnico" OR rol = "administrador") 
+                     AND estatus = "Activo"'
+                );
+                $allTecnicos = $stmtAll->fetchAll();
+                error_log("📋 Técnicos disponibles en BD (" . count($allTecnicos) . "):");
+                foreach ($allTecnicos as $tec) {
+                    error_log("  - ID: {$tec['id_usuario']}, Nombre: '{$tec['nombre']}', Rol: '{$tec['rol']}'");
+                }
+                
+                // PASO 3: Buscar técnico por nombre exacto
+                $nombreBuscado = strtoupper(trim($responsableInicial));
+                error_log("🔍 Buscando técnico con nombre: '$nombreBuscado'");
+                
+                // Buscar técnico - comparación exacta en mayúsculas
+                $stmtTecnico = $this->db->query(
+                    'SELECT id_usuario, nombre, rol FROM usuarios 
+                     WHERE (rol = "tecnico" OR rol = "administrador") 
+                     AND estatus = "Activo" 
+                     AND UPPER(TRIM(nombre)) = ?
+                     LIMIT 1',
+                    [$nombreBuscado]
+                );
+                $tecnico = $stmtTecnico->fetch();
+                
+                if ($tecnico) {
+                    $tecnicoId = (int)$tecnico['id_usuario'];
+                    $tecnicoNombre = $tecnico['nombre'];
+                    error_log("✅✅✅ TÉCNICO ENCONTRADO Y ASIGNADO: ID $tecnicoId, Nombre: '$tecnicoNombre' ✅✅✅");
+                } else {
+                    error_log("⚠️ No se encontró técnico con nombre exacto '$responsableInicial'");
+                }
+            } else {
+                error_log("⚠️ El servicio no tiene responsable_inicial configurado");
+            }
+            
+            // PASO 4: Si no se encontró el técnico específico, asignar el primero disponible (FALLBACK OBLIGATORIO)
+            if (!$tecnicoId || $tecnicoId === 0) {
+                error_log("🔄 FALLBACK: Asignando primer técnico disponible...");
+                $stmtFallback = $this->db->query(
+                    'SELECT id_usuario, nombre, rol FROM usuarios 
+                     WHERE (rol = "tecnico" OR rol = "administrador") 
+                     AND estatus = "Activo"
+                     ORDER BY id_usuario ASC
+                     LIMIT 1'
+                );
+                $tecnicoFallback = $stmtFallback->fetch();
+                
+                if ($tecnicoFallback) {
+                    $tecnicoId = (int)$tecnicoFallback['id_usuario'];
+                    $tecnicoNombre = $tecnicoFallback['nombre'];
+                    error_log("✅✅✅ TÉCNICO ASIGNADO (FALLBACK): ID $tecnicoId, Nombre: '$tecnicoNombre' ✅✅✅");
+                } else {
+                    error_log("❌❌❌ ERROR CRÍTICO: NO HAY TÉCNICOS DISPONIBLES EN LA BASE DE DATOS ❌❌❌");
+                }
+            }
+            
+            error_log("═══════════════════════════════════════════════════════");
+            error_log("📊 RESULTADO FINAL: tecnicoId = " . ($tecnicoId ?? 'NULL') . ", tecnicoNombre = " . ($tecnicoNombre ?? 'NULL'));
+            error_log("═══════════════════════════════════════════════════════");
+            
+            // Create ticket con o sin técnico asignado
+            error_log("═══════════════════════════════════════════════════════");
+            error_log("📝 CREANDO TICKET EN BASE DE DATOS");
+            error_log("   - id_usuario: " . $user['id_usuario']);
+            error_log("   - id_servicio: " . $servicio['id_servicio']);
+            error_log("   - id_tecnico: " . ($tecnicoId ?? 'NULL') . " (tipo: " . gettype($tecnicoId) . ")");
+            error_log("   - estatus: " . ($tecnicoId ? 'En proceso' : 'Pendiente'));
+            error_log("═══════════════════════════════════════════════════════");
+            
+            // Asegurar que tecnicoId sea un entero o NULL
+            $idTecnicoParaInsert = ($tecnicoId && $tecnicoId > 0) ? (int)$tecnicoId : null;
+            
             $this->db->query(
-                'INSERT INTO tickets (id_usuario, id_servicio, descripcion, prioridad, estatus, fecha_creacion)
-                 VALUES (?, ?, ?, ?, "Pendiente", NOW())',
-                [$user['id_usuario'], $servicio['id_servicio'], $descripcion, $prioridad]
+                'INSERT INTO tickets (id_usuario, id_servicio, descripcion, prioridad, estatus, fecha_creacion, id_tecnico)
+                 VALUES (?, ?, ?, ?, ?, NOW(), ?)',
+                [
+                    $user['id_usuario'], 
+                    $servicio['id_servicio'], 
+                    $descripcion, 
+                    $prioridad,
+                    $idTecnicoParaInsert ? 'En proceso' : 'Pendiente',
+                    $idTecnicoParaInsert
+                ]
             );
             
             $ticketId = $this->db->getConnection()->lastInsertId();
             
-            AuthMiddleware::sendResponse([
+            // Verificar que el ticket se creó correctamente con el técnico
+            $stmtVerificar = $this->db->query(
+                'SELECT id_ticket, id_tecnico, estatus FROM tickets WHERE id_ticket = ?',
+                [$ticketId]
+            );
+            $ticketVerificado = $stmtVerificar->fetch();
+            error_log("🔍 VERIFICACIÓN POST-INSERT:");
+            error_log("   - Ticket ID: " . ($ticketVerificado['id_ticket'] ?? 'NO ENCONTRADO'));
+            error_log("   - id_tecnico en BD: " . ($ticketVerificado['id_tecnico'] ?? 'NULL'));
+            error_log("   - estatus en BD: " . ($ticketVerificado['estatus'] ?? 'NULL'));
+            
+            $estadoFinal = $idTecnicoParaInsert ? 'En proceso' : 'Pendiente';
+            
+            if ($tecnicoId) {
+                error_log("✅ Ticket #$ticketId creado y asignado automáticamente al técnico ID $tecnicoId ($tecnicoNombre)");
+                
+                // Enviar correo de notificación cuando se asigna automáticamente
+                try {
+                    // Obtener datos completos del técnico y empleado para el correo
+                    $stmtTecnicoCompleto = $this->db->query(
+                        'SELECT id_usuario, nombre, correo FROM usuarios WHERE id_usuario = ?',
+                        [$tecnicoId]
+                    );
+                    $tecnicoCompleto = $stmtTecnicoCompleto->fetch();
+                    
+                    $stmtEmpleado = $this->db->query(
+                        'SELECT id_usuario, nombre, correo FROM usuarios WHERE id_usuario = ?',
+                        [$user['id_usuario']]
+                    );
+                    $empleado = $stmtEmpleado->fetch();
+                    
+                    if ($tecnicoCompleto && $empleado) {
+                        $ticketData = [
+                            'id' => $ticketId,
+                            'categoria' => $categoria,
+                            'subcategoria' => $subcategoria,
+                            'descripcion' => $descripcion,
+                            'prioridad' => $prioridad
+                        ];
+                        
+                        $emailService = new EmailService();
+                        $emailService->sendTicketAssignedNotification(
+                            $ticketData,
+                            ['nombre' => $tecnicoCompleto['nombre'], 'email' => $tecnicoCompleto['correo']],
+                            ['nombre' => $empleado['nombre'], 'email' => $empleado['correo']]
+                        );
+                        error_log("📧 Correos de notificación enviados para ticket #$ticketId");
+                    }
+                } catch (\Exception $e) {
+                    error_log("⚠️ Error enviando correos de notificación para ticket #$ticketId: " . $e->getMessage());
+                    // No fallar la creación del ticket si el correo falla
+                }
+            } else {
+                error_log("⚠️ Ticket #$ticketId creado sin asignar técnico (estado: $estadoFinal)");
+            }
+            
+            // Preparar respuesta con información de asignación
+            $response = [
                 'message' => 'Ticket creado exitosamente',
                 'ticket' => [
                     'id' => $ticketId,
@@ -180,9 +356,25 @@ class TicketRoutes
                     'subcategoria' => $subcategoria,
                     'descripcion' => $descripcion,
                     'prioridad' => $prioridad,
-                    'estado' => 'Pendiente'
+                    'estado' => $estadoFinal
                 ]
-            ], 201);
+            ];
+            
+            // Agregar información de asignación si se asignó
+            if ($tecnicoId) {
+                $response['asignacionAutomatica'] = [
+                    'exitosa' => true,
+                    'tecnico' => $tecnicoNombre,
+                    'tecnicoId' => $tecnicoId
+                ];
+            } else {
+                $response['asignacionAutomatica'] = [
+                    'exitosa' => false,
+                    'mensaje' => 'No se pudo asignar técnico automáticamente. El ticket quedó en estado Pendiente.'
+                ];
+            }
+            
+            AuthMiddleware::sendResponse($response, 201);
         } catch (\Exception $e) {
             error_log('Error creating ticket: ' . $e->getMessage());
             AuthMiddleware::sendError('Error interno del servidor', 500);
@@ -201,10 +393,100 @@ class TicketRoutes
         }
         
         try {
-            $this->db->query(
-                'UPDATE tickets SET estatus = ? WHERE id_ticket = ?',
-                [$estatus, $id]
+            // Obtener estado anterior y datos del ticket antes de actualizar
+            $stmtOld = $this->db->query(
+                'SELECT t.estatus, t.id_tecnico, s.categoria, s.subcategoria, 
+                        u.id_usuario as empleado_id, u.nombre as empleado_nombre, u.correo as empleado_correo,
+                        tec.nombre as tecnico_nombre, tec.correo as tecnico_correo
+                 FROM tickets t
+                 JOIN servicios s ON t.id_servicio = s.id_servicio
+                 JOIN usuarios u ON t.id_usuario = u.id_usuario
+                 LEFT JOIN usuarios tec ON t.id_tecnico = tec.id_usuario
+                 WHERE t.id_ticket = ?',
+                [$id]
             );
+            $ticketOld = $stmtOld->fetch();
+            
+            if (!$ticketOld) {
+                AuthMiddleware::sendError('Ticket no encontrado', 404);
+            }
+            
+            $estadoAnterior = $ticketOld['estatus'];
+            
+            // Verificar si se está asignando un técnico manualmente
+            $idTecnicoNuevo = $body['id_tecnico'] ?? null;
+            if ($idTecnicoNuevo && $idTecnicoNuevo != $ticketOld['id_tecnico']) {
+                // Se está asignando un técnico manualmente
+                $this->db->query(
+                    'UPDATE tickets SET estatus = ?, id_tecnico = ?, fecha_asignacion = COALESCE(fecha_asignacion, NOW()) WHERE id_ticket = ?',
+                    [$estatus, $idTecnicoNuevo, $id]
+                );
+                
+                // Enviar correo de asignación
+                try {
+                    $stmtTecnico = $this->db->query(
+                        'SELECT id_usuario, nombre, correo FROM usuarios WHERE id_usuario = ?',
+                        [$idTecnicoNuevo]
+                    );
+                    $tecnicoNuevo = $stmtTecnico->fetch();
+                    
+                    if ($tecnicoNuevo && $ticketOld) {
+                        $ticketData = [
+                            'id' => $id,
+                            'categoria' => $ticketOld['categoria'],
+                            'subcategoria' => $ticketOld['subcategoria'],
+                            'descripcion' => '',
+                            'prioridad' => 'Media'
+                        ];
+                        
+                        $emailService = new EmailService();
+                        $emailService->sendTicketAssignedNotification(
+                            $ticketData,
+                            ['nombre' => $tecnicoNuevo['nombre'], 'email' => $tecnicoNuevo['correo']],
+                            ['nombre' => $ticketOld['empleado_nombre'], 'email' => $ticketOld['empleado_correo']]
+                        );
+                        error_log("📧 Correos de asignación manual enviados para ticket #$id");
+                    }
+                } catch (\Exception $e) {
+                    error_log("⚠️ Error enviando correos de asignación manual para ticket #$id: " . $e->getMessage());
+                }
+            } else {
+                // Solo cambio de estado
+                $this->db->query(
+                    'UPDATE tickets SET estatus = ? WHERE id_ticket = ?',
+                    [$estatus, $id]
+                );
+            }
+            
+            // Enviar correo de cambio de estado si cambió
+            if ($estadoAnterior !== $estatus) {
+                try {
+                    $ticketData = [
+                        'id' => $id,
+                        'categoria' => $ticketOld['categoria'],
+                        'subcategoria' => $ticketOld['subcategoria']
+                    ];
+                    
+                    $technician = null;
+                    if ($ticketOld['id_tecnico']) {
+                        $technician = [
+                            'nombre' => $ticketOld['tecnico_nombre'] ?? 'Técnico',
+                            'email' => $ticketOld['tecnico_correo'] ?? ''
+                        ];
+                    }
+                    
+                    $employee = [
+                        'nombre' => $ticketOld['empleado_nombre'],
+                        'email' => $ticketOld['empleado_correo']
+                    ];
+                    
+                    $emailService = new EmailService();
+                    $emailService->sendTicketStatusChangeNotification($ticketData, $estatus, $estadoAnterior, $technician, $employee);
+                    error_log("📧 Correo de cambio de estado enviado para ticket #$id");
+                } catch (\Exception $e) {
+                    error_log("⚠️ Error enviando correo de cambio de estado para ticket #$id: " . $e->getMessage());
+                }
+            }
             
             AuthMiddleware::sendResponse(['message' => 'Estado actualizado exitosamente']);
         } catch (\Exception $e) {
@@ -237,6 +519,39 @@ class TicketRoutes
                 'INSERT INTO evaluaciones (id_ticket, calificacion, comentario, fecha_evaluacion) VALUES (?, ?, ?, NOW())',
                 [$id, $rating, $comentarios]
             );
+            
+            // Enviar correo de notificación
+            try {
+                $stmtTicket = $this->db->query(
+                    'SELECT t.id_ticket, s.categoria, s.subcategoria, u.nombre as empleado_nombre, u.correo as empleado_correo
+                     FROM tickets t
+                     JOIN servicios s ON t.id_servicio = s.id_servicio
+                     JOIN usuarios u ON t.id_usuario = u.id_usuario
+                     WHERE t.id_ticket = ?',
+                    [$id]
+                );
+                $ticketInfo = $stmtTicket->fetch();
+                
+                if ($ticketInfo) {
+                    $ticketData = [
+                        'id' => $ticketInfo['id_ticket'],
+                        'categoria' => $ticketInfo['categoria'],
+                        'subcategoria' => $ticketInfo['subcategoria']
+                    ];
+                    
+                    $employee = [
+                        'nombre' => $ticketInfo['empleado_nombre'],
+                        'email' => $ticketInfo['empleado_correo']
+                    ];
+                    
+                    $emailService = new EmailService();
+                    $emailService->sendTicketClosedNotification($ticketData, $employee);
+                    error_log("📧 Correo de ticket cerrado enviado para ticket #$id");
+                }
+            } catch (\Exception $e) {
+                error_log("⚠️ Error enviando correo de ticket cerrado para ticket #$id: " . $e->getMessage());
+                // No fallar la operación si el correo falla
+            }
             
             AuthMiddleware::sendResponse(['message' => 'Ticket cerrado exitosamente']);
         } catch (\Exception $e) {
@@ -619,6 +934,50 @@ class TicketRoutes
                 'INSERT INTO escalamientos (id_ticket, tecnico_original_id, tecnico_nuevo_id, nivel_escalamiento, persona_enviar, motivo_escalamiento, fecha_escalamiento) VALUES (?, ?, ?, ?, ?, ?, NOW())',
                 [$id, $user['id_usuario'], $tecnicoDestino, 'Manual', $tecnicoDestino, $motivoEscalamiento]
             );
+            
+            // Enviar correos de notificación
+            try {
+                // Obtener información completa del ticket y empleado
+                $stmtTicket = $this->db->query(
+                    'SELECT t.id_ticket, s.categoria, s.subcategoria, u.id_usuario as empleado_id, u.nombre as empleado_nombre, u.correo as empleado_correo
+                     FROM tickets t
+                     JOIN servicios s ON t.id_servicio = s.id_servicio
+                     JOIN usuarios u ON t.id_usuario = u.id_usuario
+                     WHERE t.id_ticket = ?',
+                    [$id]
+                );
+                $ticketInfo = $stmtTicket->fetch();
+                
+                if ($ticketInfo) {
+                    $ticketData = [
+                        'id' => $ticketInfo['id_ticket'],
+                        'categoria' => $ticketInfo['categoria'],
+                        'subcategoria' => $ticketInfo['subcategoria']
+                    ];
+                    
+                    $oldTechnician = [
+                        'nombre' => $user['nombre'] ?? 'Técnico anterior',
+                        'email' => $user['correo'] ?? ''
+                    ];
+                    
+                    $newTechnician = [
+                        'nombre' => $tecnicoDestinoInfo['nombre'],
+                        'email' => $tecnicoDestinoInfo['correo']
+                    ];
+                    
+                    $employee = [
+                        'nombre' => $ticketInfo['empleado_nombre'],
+                        'email' => $ticketInfo['empleado_correo']
+                    ];
+                    
+                    $emailService = new EmailService();
+                    $emailService->sendTicketEscalatedNotification($ticketData, $newTechnician, $oldTechnician, $employee, $motivoEscalamiento);
+                    error_log("📧 Correos de escalamiento enviados para ticket #$id");
+                }
+            } catch (\Exception $e) {
+                error_log("⚠️ Error enviando correos de escalamiento para ticket #$id: " . $e->getMessage());
+                // No fallar la operación si el correo falla
+            }
             
             AuthMiddleware::sendResponse([
                 'message' => 'Ticket escalado exitosamente a ' . $tecnicoDestinoInfo['nombre'],

@@ -6,30 +6,44 @@ import { inject } from '@angular/core';
 
 // Función interceptor para usar con withInterceptors
 export const authInterceptor: HttpInterceptorFn = (req: HttpRequest<unknown>, next: (req: HttpRequest<unknown>) => Observable<HttpEvent<unknown>>) => {
-  const authService = inject(AuthService);
+  // Obtener token directamente de localStorage (más confiable)
+  let token: string | null = null;
+  
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      token = localStorage.getItem('token');
+    }
+  } catch (e) {
+    // Si falla al acceder a localStorage, continuar sin token
+    console.warn('⚠️ No se pudo acceder a localStorage');
+  }
 
-  // Obtener el token del AuthService
-  const token = authService.getToken();
-
-  // Log para debugging
-  if (req.url.includes('/api/services')) {
-    console.log('🔍 AuthInterceptor - URL:', req.url);
-    console.log('🔑 Token disponible:', token ? 'SÍ' : 'NO');
-    if (token) {
-      console.log('🔑 Token (primeros 20 chars):', token.substring(0, 20) + '...');
+  // Si no hay token en localStorage, intentar del AuthService como fallback
+  if (!token) {
+    try {
+      const authService = inject(AuthService);
+      token = authService.getToken();
+    } catch (e) {
+      // Si falla la inyección, continuar sin token (no es crítico)
     }
   }
 
   // Si hay token, agregarlo al header de Authorization
   if (token) {
-    const authReq = req.clone({
-      headers: req.headers.set('Authorization', `Bearer ${token}`)
-    });
-    return next(authReq);
+    try {
+      const authReq = req.clone({
+        setHeaders: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+      return next(authReq);
+    } catch (e) {
+      // Si falla al clonar la petición, continuar con la original
+      return next(req);
+    }
   }
-
+  
   // Si no hay token, enviar la petición sin modificar
-  console.log('⚠️ AuthInterceptor - Enviando petición sin token');
   return next(req);
 };
 

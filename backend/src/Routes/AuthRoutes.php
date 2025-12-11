@@ -307,18 +307,27 @@ class AuthRoutes
             
             $html = $this->generatePasswordRecoveryEmail($user['nombre'], $nuevaPassword, $loginUrl);
             
+            // Helper para limpiar variables de entorno (eliminar comillas)
+            $cleanEnv = function($key, $default = '') {
+                $value = $_ENV[$key] ?? $default;
+                // Eliminar comillas circundantes si están presentes
+                if (is_string($value) && strlen($value) > 0) {
+                    if (($value[0] === '"' && substr($value, -1) === '"') || ($value[0] === "'" && substr($value, -1) === "'")) {
+                        $value = substr($value, 1, -1);
+                    }
+                }
+                return trim($value);
+            };
+            
             // Validar configuración SMTP antes de intentar enviar
-            $smtpUser = $_ENV['SMTP_USER'] ?? '';
-            $smtpPass = $_ENV['SMTP_PASS'] ?? '';
-            $smtpHost = $_ENV['SMTP_HOST'] ?? '';
+            $smtpUser = $cleanEnv('SMTP_USER', '');
+            $smtpPass = $cleanEnv('SMTP_PASS', '');
+            $smtpHost = $cleanEnv('SMTP_HOST', '');
             
             if (empty($smtpUser) || empty($smtpPass) || empty($smtpHost)) {
                 error_log("❌ Configuración SMTP incompleta - SMTP_USER: " . (empty($smtpUser) ? 'VACÍO' : 'OK') . ", SMTP_PASS: " . (empty($smtpPass) ? 'VACÍO' : 'OK') . ", SMTP_HOST: " . (empty($smtpHost) ? 'VACÍO' : 'OK'));
-                // Aún así devolver éxito para no revelar información, pero loguear el error
-                AuthMiddleware::sendResponse([
-                    'message' => 'Se ha generado una contraseña temporal. Por favor, contacta al administrador si no recibes el correo.',
-                    'warning' => 'La configuración de correo no está completa. Contacta al administrador.'
-                ]);
+                // Devolver error claro al usuario
+                AuthMiddleware::sendError('Error al enviar el correo. Por favor, intenta nuevamente.', 500);
                 return;
             }
             

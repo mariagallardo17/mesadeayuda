@@ -8,6 +8,7 @@ use PHPMailer\PHPMailer\Exception;
 class EmailService
 {
     private $mailer;
+    private $useSendGrid = false;
 
     public function __construct()
     {
@@ -23,7 +24,7 @@ class EmailService
             return trim($value);
         };
 
-        // Server settings
+        // Server settings - Configuración SMTP simple
         $this->mailer->isSMTP();
         $this->mailer->Host = $cleanEnv('SMTP_HOST', 'smtp.gmail.com');
         $this->mailer->SMTPAuth = true;
@@ -51,12 +52,23 @@ class EmailService
                 'verify_peer' => false,
                 'verify_peer_name' => false,
                 'allow_self_signed' => true,
-                'crypto_method' => STREAM_CRYPTO_METHOD_TLS_CLIENT
+                'crypto_method' => STREAM_CRYPTO_METHOD_TLS_CLIENT,
+                'cafile' => false,
+                'capath' => false
+            ],
+            'tls' => [
+                'verify_peer' => false,
+                'verify_peer_name' => false,
+                'allow_self_signed' => true
             ]
         ];
 
-        // Timeout más largo para conexiones lentas
-        $this->mailer->Timeout = 30;
+        // Timeout más largo para conexiones lentas y hostings con conexiones lentas
+        $this->mailer->Timeout = 60;
+        $this->mailer->SMTPKeepAlive = false;
+        
+        // Configuraciones adicionales para mejorar la conexión
+        $this->mailer->SMTPAutoTLS = true;
 
         // Habilitar debug si está configurado o si hay problemas
         $debugLevel = isset($_ENV['SMTP_DEBUG']) && $_ENV['SMTP_DEBUG'] === 'true' ? 2 : 0;
@@ -129,27 +141,101 @@ class EmailService
             error_log("📤 Intentando enviar correo a: $to");
             error_log("📤 Configuración SMTP: Host={$this->mailer->Host}, Port={$this->mailer->Port}, User={$this->mailer->Username}, Secure={$this->mailer->SMTPSecure}, Timeout={$this->mailer->Timeout}");
 
-            // Habilitar debug temporalmente para capturar errores
-            if ($enableDebug || isset($_ENV['SMTP_DEBUG']) && $_ENV['SMTP_DEBUG'] === 'true') {
-                $this->mailer->SMTPDebug = 2;
-                $this->mailer->Debugoutput = function($str, $level) {
-                    error_log("PHPMailer Debug (Level $level): $str");
-                };
+            // Habilitar debug para capturar errores detallados
+            // Siempre habilitar debug nivel 2 para ver exactamente qué pasa
+            $this->mailer->SMTPDebug = 2;
+            $this->mailer->Debugoutput = function($str, $level) {
+                error_log("PHPMailer Debug (Level $level): $str");
+            };
+
+            // Intentar enviar con la configuración actual
+            $lastError = null;
+            try {
+                $result = $this->mailer->send();
+                
+                // Restaurar debug original
+                $this->mailer->SMTPDebug = $originalDebug;
+
+                if ($result) {
+                    error_log("✅ Correo enviado exitosamente a: $to");
+                    error_log("✅ PHPMailer confirmó el envío correctamente");
+                    return true;
+                } else {
+                    $lastError = $this->mailer->ErrorInfo;
+                    error_log("❌ PHPMailer falló al enviar: $lastError");
+                    error_log("❌ send() devolvió false - NO se envió el correo");
+                    // Lanzar excepción inmediatamente, no continuar
+                    throw new \Exception("PHPMailer no pudo enviar el correo: $lastError");
+                }
+            } catch (\Exception $e) {
+                $lastError = $e->getMessage() . " | " . ($this->mailer->ErrorInfo ?? 'Sin información adicional');
+                error_log("❌ Excepción al enviar correo: " . $e->getMessage());
+                error_log("❌ ErrorInfo completo: " . ($this->mailer->ErrorInfo ?? 'N/A'));
+                
+                // Si es un error de conexión, intentar con puerto alternativo
+                $lowerError = strtolower($lastError);
+                $isConnectionError = strpos($lowerError, 'connection') !== false || 
+                    strpos($lowerError, 'could not connect') !== false || 
+                    strpos($lowerError, 'timeout') !== false ||
+                    strpos($lowerError, 'stream_socket_client') !== false ||
+                    strpos($lowerError, 'cannot assign requested address') !== false ||
+                    strpos($lowerError, 'failed to connect') !== false;
+                
+                if ($isConnectionError) {
+                    
+                    // Intentar con puerto alternativo
+                    $originalPort = $this->mailer->Port;
+                    $originalSecure = $this->mailer->SMTPSecure;
+                    
+                    if ($originalPort == 587) {
+                        // Intentar con puerto 465 (SSL)
+                        error_log("🔄 Intentando con puerto alternativo 465 (SSL)...");
+                        $this->mailer->Port = 465;
+                        $this->mailer->SMTPSecure = PHPMailer::ENCRYPTION_SMTPS;
+                    } elseif ($originalPort == 465) {
+                        // Intentar con puerto 587 (STARTTLS)
+                        error_log("🔄 Intentando con puerto alternativo 587 (STARTTLS)...");
+                        $this->mailer->Port = 587;
+                        $this->mailer->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+                    }
+                    
+                    try {
+                        // Limpiar y reconfigurar
+                        $this->mailer->clearAddresses();
+                        $this->mailer->addAddress($to);
+                        $this->mailer->Subject = $subject;
+                        $this->mailer->Body = $htmlBody;
+                        $this->mailer->AltBody = strip_tags($htmlBody);
+                        
+                        $result = $this->mailer->send();
+                        $this->mailer->SMTPDebug = $originalDebug;
+                        
+                        if ($result) {
+                            error_log("✅ Correo enviado exitosamente con puerto alternativo a: $to");
+                            return true;
+                        } else {
+                            $lastError = $this->mailer->ErrorInfo;
+                        }
+                    } catch (\Exception $e2) {
+                        $lastError = $e2->getMessage() . " | " . ($this->mailer->ErrorInfo ?? 'Sin información adicional');
+                        error_log("❌ También falló con puerto alternativo: " . $e2->getMessage());
+                    } finally {
+                        // Restaurar configuración original
+                        $this->mailer->Port = $originalPort;
+                        $this->mailer->SMTPSecure = $originalSecure;
+                    }
+                }
             }
 
-            $result = $this->mailer->send();
-
-            // Restaurar debug original
+            // Si llegamos aquí, ambos intentos SMTP fallaron
             $this->mailer->SMTPDebug = $originalDebug;
-
-            if (!$result) {
-                $errorInfo = $this->mailer->ErrorInfo;
-                error_log("❌ PHPMailer falló al enviar: $errorInfo");
-                throw new \Exception("PHPMailer no pudo enviar el correo: $errorInfo");
-            }
-
-            error_log("✅ Correo enviado exitosamente a: $to");
-            return true;
+            
+            // Lanzar excepción clara
+            $errorMsg = "No se pudo conectar al servidor SMTP. ";
+            $errorMsg .= "Error: " . ($lastError ?? 'Desconocido');
+            $errorMsg .= " | El hosting puede estar bloqueando las conexiones SMTP salientes.";
+            
+            throw new \Exception($errorMsg);
         } catch (Exception $e) {
             // Restaurar debug original
             $this->mailer->SMTPDebug = $originalDebug;
@@ -171,6 +257,170 @@ class EmailService
             $exception = new \Exception($userFriendlyError);
             $exception->detailedError = $detailedError;
             throw $exception;
+        }
+    }
+
+    /**
+     * Método alternativo usando mail() de PHP cuando SMTP está bloqueado
+     * Usa el servidor de correo del hosting en lugar de SMTP externo
+     */
+    private function sendEmailUsingPHPMail($to, $subject, $htmlBody)
+    {
+        try {
+            // Obtener el remitente desde la configuración
+            $cleanEnv = function($key, $default = '') {
+                $value = $_ENV[$key] ?? $default;
+                if (is_string($value) && strlen($value) > 0) {
+                    if (($value[0] === '"' && substr($value, -1) === '"') || ($value[0] === "'" && substr($value, -1) === "'")) {
+                        $value = substr($value, 1, -1);
+                    }
+                }
+                return trim($value);
+            };
+            
+            $smtpFrom = $cleanEnv('SMTP_FROM', '');
+            $smtpUser = $cleanEnv('SMTP_USER', '');
+            
+            // Determinar el remitente
+            $fromEmail = $smtpUser;
+            $fromName = 'Mesa de Ayuda - ITS';
+            
+            if (!empty($smtpFrom)) {
+                if (preg_match('/^(.+?)\s*<(.+?)>$/', $smtpFrom, $matches)) {
+                    $fromName = trim($matches[1]);
+                    $fromEmail = trim($matches[2]);
+                } else {
+                    $fromEmail = $smtpFrom;
+                }
+            }
+            
+            // Preparar headers para mail()
+            $headers = [];
+            $headers[] = "MIME-Version: 1.0";
+            $headers[] = "Content-Type: text/html; charset=UTF-8";
+            $headers[] = "From: {$fromName} <{$fromEmail}>";
+            $headers[] = "Reply-To: {$fromEmail}";
+            $headers[] = "X-Mailer: PHP/" . phpversion();
+            
+            $headersString = implode("\r\n", $headers);
+            
+            // Intentar enviar usando mail() de PHP
+            $result = @mail($to, $subject, $htmlBody, $headersString);
+            
+            if ($result) {
+                error_log("✅ mail() de PHP envió el correo exitosamente a: $to");
+                return true;
+            } else {
+                error_log("❌ mail() de PHP falló al enviar a: $to");
+                $lastError = error_get_last();
+                if ($lastError) {
+                    error_log("❌ Último error de PHP: " . $lastError['message']);
+                }
+                return false;
+            }
+        } catch (\Exception $e) {
+            error_log("❌ Excepción en sendEmailUsingPHPMail: " . $e->getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Método alternativo usando SendGrid API cuando SMTP está bloqueado
+     * SendGrid funciona a través de API REST, no necesita conexiones SMTP salientes
+     */
+    private function sendEmailUsingSendGrid($to, $subject, $htmlBody)
+    {
+        try {
+            // Verificar si SendGrid está configurado
+            $cleanEnv = function($key, $default = '') {
+                $value = $_ENV[$key] ?? $default;
+                if (is_string($value) && strlen($value) > 0) {
+                    if (($value[0] === '"' && substr($value, -1) === '"') || ($value[0] === "'" && substr($value, -1) === "'")) {
+                        $value = substr($value, 1, -1);
+                    }
+                }
+                return trim($value);
+            };
+            
+            $sendGridApiKey = $cleanEnv('SENDGRID_API_KEY', '');
+            
+            if (empty($sendGridApiKey)) {
+                error_log("⚠️ SendGrid no está configurado (SENDGRID_API_KEY no encontrado)");
+                return false;
+            }
+            
+            // Obtener remitente
+            $smtpFrom = $cleanEnv('SMTP_FROM', '');
+            $smtpUser = $cleanEnv('SMTP_USER', '');
+            
+            $fromEmail = $smtpUser;
+            $fromName = 'Mesa de Ayuda - ITS';
+            
+            if (!empty($smtpFrom)) {
+                if (preg_match('/^(.+?)\s*<(.+?)>$/', $smtpFrom, $matches)) {
+                    $fromName = trim($matches[1]);
+                    $fromEmail = trim($matches[2]);
+                } else {
+                    $fromEmail = $smtpFrom;
+                }
+            }
+            
+            // Preparar datos para SendGrid API
+            $data = [
+                'personalizations' => [
+                    [
+                        'to' => [
+                            ['email' => $to]
+                        ],
+                        'subject' => $subject
+                    ]
+                ],
+                'from' => [
+                    'email' => $fromEmail,
+                    'name' => $fromName
+                ],
+                'content' => [
+                    [
+                        'type' => 'text/html',
+                        'value' => $htmlBody
+                    ]
+                ]
+            ];
+            
+            // Enviar a través de SendGrid API usando cURL
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, 'https://api.sendgrid.com/v3/mail/send');
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($data));
+            curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                'Authorization: Bearer ' . $sendGridApiKey,
+                'Content-Type: application/json'
+            ]);
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+            
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlError = curl_error($ch);
+            curl_close($ch);
+            
+            if ($curlError) {
+                error_log("❌ Error cURL con SendGrid: $curlError");
+                return false;
+            }
+            
+            if ($httpCode >= 200 && $httpCode < 300) {
+                error_log("✅ SendGrid envió el correo exitosamente (HTTP $httpCode)");
+                return true;
+            } else {
+                error_log("❌ SendGrid falló (HTTP $httpCode): $response");
+                return false;
+            }
+            
+        } catch (\Exception $e) {
+            error_log("❌ Excepción en sendEmailUsingSendGrid: " . $e->getMessage());
+            return false;
         }
     }
 
@@ -320,6 +570,192 @@ HTML;
         </div>
         <div style="text-align: center; margin: 30px 0;">
             <a href="$ticketUrl" style="background-color: #4CAF50; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold; font-size: 16px;">Ver Mis Tickets</a>
+        </div>
+        <hr style="border:none; border-top:2px solid #ececec; margin: 32px 0 15px 0;">
+        <div style="font-size: 13px; color:#777; text-align: center;">Mesa de Ayuda - ITS<br>No responder a este correo.</div>
+    </div>
+</body>
+</html>
+HTML;
+    }
+
+    public function sendTicketClosedNotification($ticket, $employee)
+    {
+        $subject = "Ticket #{$ticket['id']} cerrado";
+        $htmlContent = $this->generateTicketClosedEmail($ticket, $employee);
+
+        try {
+            $this->sendEmail($employee['email'], $subject, $htmlContent);
+            error_log("Correo de ticket cerrado enviado para ticket #{$ticket['id']}");
+        } catch (\Exception $e) {
+            error_log("Error enviando correo de ticket cerrado: " . $e->getMessage());
+        }
+    }
+
+    public function sendTicketEscalatedNotification($ticket, $newTechnician, $oldTechnician, $employee, $motivo)
+    {
+        $subject = "Ticket #{$ticket['id']} escalado";
+        
+        try {
+            // Enviar al nuevo técnico
+            $htmlContentNewTech = $this->generateTicketEscalatedEmail($ticket, $newTechnician, $oldTechnician, $employee, $motivo, 'new');
+            $this->sendEmail($newTechnician['email'], $subject, $htmlContentNewTech);
+            
+            // Enviar al empleado
+            $htmlContentEmployee = $this->generateTicketEscalatedEmail($ticket, $newTechnician, $oldTechnician, $employee, $motivo, 'employee');
+            $this->sendEmail($employee['email'], "Tu ticket #{$ticket['id']} ha sido escalado", $htmlContentEmployee);
+            
+            error_log("Correos de ticket escalado enviados para ticket #{$ticket['id']}");
+        } catch (\Exception $e) {
+            error_log("Error enviando correos de ticket escalado: " . $e->getMessage());
+        }
+    }
+
+    public function sendTicketStatusChangeNotification($ticket, $newStatus, $oldStatus, $technician, $employee)
+    {
+        $subject = "Cambio de estado - Ticket #{$ticket['id']}";
+        $htmlContent = $this->generateTicketStatusChangeEmail($ticket, $newStatus, $oldStatus, $technician, $employee);
+
+        try {
+            // Enviar al empleado
+            $this->sendEmail($employee['email'], $subject, $htmlContent);
+            
+            // Si hay técnico asignado, también enviarle
+            if ($technician && !empty($technician['email'])) {
+                $this->sendEmail($technician['email'], $subject, $htmlContent);
+            }
+            
+            error_log("Correo de cambio de estado enviado para ticket #{$ticket['id']}");
+        } catch (\Exception $e) {
+            error_log("Error enviando correo de cambio de estado: " . $e->getMessage());
+        }
+    }
+
+    private function generateTicketClosedEmail($ticket, $employee)
+    {
+        $baseUrl = $this->getFrontendUrl();
+        $ticketUrl = "$baseUrl/tickets";
+
+        return <<<HTML
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Ticket Cerrado</title>
+</head>
+<body style="font-family: Arial, sans-serif; background: #f8f9fa; margin:0; padding:0;">
+    <div style="max-width: 600px; margin: 30px auto; background: #fff; border-radius: 15px; box-shadow: 0 2px 8px #e0e0e0; padding: 30px;">
+        <h2 style="text-align: center; color: #4CAF50; margin-bottom: 10px;">Ticket Cerrado</h2>
+        <hr style="border:none; border-top:2px solid #4CAF50; margin-bottom: 30px;">
+        <p>Hola <strong>{$employee['nombre']}</strong>:</p>
+        <p>Tu ticket ha sido cerrado:</p>
+        <div style="background: #e8f5e9; border-left: 6px solid #4CAF50; padding: 20px; margin: 25px 0;">
+            <p><strong>Ticket #:</strong> {$ticket['id']}</p>
+            <p><strong>Categoría:</strong> {$ticket['categoria']} - {$ticket['subcategoria']}</p>
+            <p><strong>Estado:</strong> Cerrado</p>
+        </div>
+        <div style="text-align: center; margin: 30px 0;">
+            <a href="$ticketUrl" style="background-color: #4CAF50; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold; font-size: 16px;">Ver Mis Tickets</a>
+        </div>
+        <hr style="border:none; border-top:2px solid #ececec; margin: 32px 0 15px 0;">
+        <div style="font-size: 13px; color:#777; text-align: center;">Mesa de Ayuda - ITS<br>No responder a este correo.</div>
+    </div>
+</body>
+</html>
+HTML;
+    }
+
+    private function generateTicketEscalatedEmail($ticket, $newTechnician, $oldTechnician, $employee, $motivo, $recipient)
+    {
+        $baseUrl = $this->getFrontendUrl();
+        
+        if ($recipient === 'new') {
+            $ticketUrl = "$baseUrl/tickets/assigned";
+            return <<<HTML
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Ticket Escalado</title>
+</head>
+<body style="font-family: Arial, sans-serif; background: #f8f9fa; margin:0; padding:0;">
+    <div style="max-width: 600px; margin: 30px auto; background: #fff; border-radius: 15px; box-shadow: 0 2px 8px #e0e0e0; padding: 30px;">
+        <h2 style="text-align: center; color: #FF9800; margin-bottom: 10px;">Ticket Escalado</h2>
+        <hr style="border:none; border-top:2px solid #FF9800; margin-bottom: 30px;">
+        <p>Hola <strong>{$newTechnician['nombre']}</strong>:</p>
+        <p>Se te ha escalado un ticket:</p>
+        <div style="background: #fff3e0; border-left: 6px solid #FF9800; padding: 20px; margin: 25px 0;">
+            <p><strong>Ticket #:</strong> {$ticket['id']}</p>
+            <p><strong>Categoría:</strong> {$ticket['categoria']} - {$ticket['subcategoria']}</p>
+            <p><strong>Técnico anterior:</strong> {$oldTechnician['nombre']}</p>
+            <p><strong>Motivo:</strong> {$motivo}</p>
+        </div>
+        <div style="text-align: center; margin: 30px 0;">
+            <a href="$ticketUrl" style="background-color: #FF9800; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold; font-size: 16px;">Ver Ticket</a>
+        </div>
+        <hr style="border:none; border-top:2px solid #ececec; margin: 32px 0 15px 0;">
+        <div style="font-size: 13px; color:#777; text-align: center;">Mesa de Ayuda - ITS<br>No responder a este correo.</div>
+    </div>
+</body>
+</html>
+HTML;
+        } else {
+            $ticketUrl = "$baseUrl/tickets";
+            return <<<HTML
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Ticket Escalado</title>
+</head>
+<body style="font-family: Arial, sans-serif; background: #f8f9fa; margin:0; padding:0;">
+    <div style="max-width: 600px; margin: 30px auto; background: #fff; border-radius: 15px; box-shadow: 0 2px 8px #e0e0e0; padding: 30px;">
+        <h2 style="text-align: center; color: #FF9800; margin-bottom: 10px;">Ticket Escalado</h2>
+        <hr style="border:none; border-top:2px solid #FF9800; margin-bottom: 30px;">
+        <p>Hola <strong>{$employee['nombre']}</strong>:</p>
+        <p>Tu ticket ha sido escalado a otro técnico:</p>
+        <div style="background: #fff3e0; border-left: 6px solid #FF9800; padding: 20px; margin: 25px 0;">
+            <p><strong>Ticket #:</strong> {$ticket['id']}</p>
+            <p><strong>Nuevo técnico:</strong> {$newTechnician['nombre']}</p>
+            <p><strong>Motivo:</strong> {$motivo}</p>
+        </div>
+        <div style="text-align: center; margin: 30px 0;">
+            <a href="$ticketUrl" style="background-color: #FF9800; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold; font-size: 16px;">Ver Mis Tickets</a>
+        </div>
+        <hr style="border:none; border-top:2px solid #ececec; margin: 32px 0 15px 0;">
+        <div style="font-size: 13px; color:#777; text-align: center;">Mesa de Ayuda - ITS<br>No responder a este correo.</div>
+    </div>
+</body>
+</html>
+HTML;
+        }
+    }
+
+    private function generateTicketStatusChangeEmail($ticket, $newStatus, $oldStatus, $technician, $employee)
+    {
+        $baseUrl = $this->getFrontendUrl();
+        $ticketUrl = "$baseUrl/tickets";
+
+        return <<<HTML
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Cambio de Estado</title>
+</head>
+<body style="font-family: Arial, sans-serif; background: #f8f9fa; margin:0; padding:0;">
+    <div style="max-width: 600px; margin: 30px auto; background: #fff; border-radius: 15px; box-shadow: 0 2px 8px #e0e0e0; padding: 30px;">
+        <h2 style="text-align: center; color: #2196F3; margin-bottom: 10px;">Cambio de Estado</h2>
+        <hr style="border:none; border-top:2px solid #2196F3; margin-bottom: 30px;">
+        <p>Hola <strong>{$employee['nombre']}</strong>:</p>
+        <p>El estado de tu ticket ha cambiado:</p>
+        <div style="background: #e3f2fd; border-left: 6px solid #2196F3; padding: 20px; margin: 25px 0;">
+            <p><strong>Ticket #:</strong> {$ticket['id']}</p>
+            <p><strong>Estado anterior:</strong> {$oldStatus}</p>
+            <p><strong>Nuevo estado:</strong> {$newStatus}</p>
+        </div>
+        <div style="text-align: center; margin: 30px 0;">
+            <a href="$ticketUrl" style="background-color: #2196F3; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold; font-size: 16px;">Ver Mis Tickets</a>
         </div>
         <hr style="border:none; border-top:2px solid #ececec; margin: 32px 0 15px 0;">
         <div style="font-size: 13px; color:#777; text-align: center;">Mesa de Ayuda - ITS<br>No responder a este correo.</div>

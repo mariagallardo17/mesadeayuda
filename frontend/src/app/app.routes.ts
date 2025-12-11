@@ -5,7 +5,7 @@ import { RoleGuard } from './guards/role.guard';
 export const routes: Routes = [
   {
     path: '',
-    redirectTo: '/profile',
+    redirectTo: '/login',
     pathMatch: 'full'
   },
   {

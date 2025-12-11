@@ -82,17 +82,61 @@ export class ManageUsersComponent implements OnInit, OnDestroy {
   }
 
   loadUsers(): void {
+    // Verificar que haya token antes de intentar cargar usuarios
+    const token = localStorage.getItem('token');
+    if (!token) {
+      console.error('❌ No hay token de autenticación');
+      this.errorMessage = 'Tu sesión ha expirado. Por favor, inicia sesión nuevamente.';
+      this.users = [];
+      this.filteredUsers = [];
+      this.isLoading = false;
+      // Redirigir al login después de 2 segundos
+      setTimeout(() => {
+        window.location.href = '/login';
+      }, 2000);
+      return;
+    }
+
+    console.log('🔍 Iniciando carga de usuarios...');
+    console.log('🔑 Token disponible:', token ? 'SÍ' : 'NO');
+    
     this.isLoading = true;
+    this.errorMessage = '';
     this.userService.getUsers()
       .pipe(takeUntil(this.destroy$))
       .subscribe({
         next: (users) => {
+          console.log('✅ Usuarios recibidos:', users);
           this.users = users;
           this.filteredUsers = users;
           this.isLoading = false;
         },
         error: (error) => {
-          this.errorMessage = 'Error al cargar los usuarios';
+          console.error('❌ Error cargando usuarios:', error);
+          console.error('❌ Status:', error.status);
+          console.error('❌ Error completo:', JSON.stringify(error, null, 2));
+          
+          let errorMsg = 'Error al cargar los usuarios';
+          
+          if (error.status === 401) {
+            errorMsg = 'Tu sesión ha expirado. Por favor, inicia sesión nuevamente.';
+            // Limpiar localStorage y redirigir al login
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            setTimeout(() => {
+              window.location.href = '/login';
+            }, 2000);
+          } else if (error.status === 403) {
+            errorMsg = error.error?.error || 'No tienes permisos para ver los usuarios. Se requiere rol de administrador.';
+          } else if (error.status === 0) {
+            errorMsg = 'Error de conexión. Verifica que el servidor esté disponible.';
+          } else {
+            errorMsg = error.error?.error || error.message || 'Error al cargar los usuarios';
+          }
+          
+          this.errorMessage = errorMsg;
+          this.users = [];
+          this.filteredUsers = [];
           this.isLoading = false;
         }
       });
