@@ -1112,72 +1112,89 @@ class TicketRoutes
             AuthMiddleware::sendError('Error interno del servidor', 500);
         }
     }
-    
     public function closeTicket($id)
     {
         $user = AuthMiddleware::authenticate();
         $body = AuthMiddleware::getRequestBody();
-        
-        $rating = $body['rating'] ?? 0;
-        $comentarios = $body['comentarios'] ?? '';
-        
+    
+        // Aceptar ambos formatos (rating/calificacion y comentarios/comentario)
+        $rating = $body['rating'] 
+            ?? $body['calificacion'] 
+            ?? 0;
+    
+        $comentarios = $body['comentarios'] 
+            ?? $body['comentario'] 
+            ?? '';
+    
         if ($rating < 1 || $rating > 5) {
             AuthMiddleware::sendError('La calificación debe ser entre 1 y 5 estrellas', 400);
+            return;
         }
-        
+    
         try {
-            // Close ticket
-            $this->db->query(
-                'UPDATE tickets SET estatus = "Cerrado", fecha_cierre = NOW() WHERE id_ticket = ? AND id_usuario = ?',
-                [$id, $user['id_usuario']]
+            // Verificar que el ticket existe y obtener información
+            $stmtTicket = $this->db->query(
+                'SELECT id_ticket, id_usuario, id_tecnico, estatus FROM tickets WHERE id_ticket = ?',
+                [$id]
             );
+            $ticket = $stmtTicket->fetch();
             
-            // Create evaluation
-            $this->db->query(
-                'INSERT INTO evaluaciones (id_ticket, calificacion, comentario, fecha_evaluacion) VALUES (?, ?, ?, NOW())',
-                [$id, $rating, $comentarios]
-            );
-            
-            // Enviar correo de notificación
-            try {
-                $stmtTicket = $this->db->query(
-                    'SELECT t.id_ticket, s.categoria, s.subcategoria, u.nombre as empleado_nombre, u.correo as empleado_correo
-                     FROM tickets t
-                     JOIN servicios s ON t.id_servicio = s.id_servicio
-                     JOIN usuarios u ON t.id_usuario = u.id_usuario
-                     WHERE t.id_ticket = ?',
-                    [$id]
-                );
-                $ticketInfo = $stmtTicket->fetch();
-                
-                if ($ticketInfo) {
-                    $ticketData = [
-                        'id' => $ticketInfo['id_ticket'],
-                        'categoria' => $ticketInfo['categoria'],
-                        'subcategoria' => $ticketInfo['subcategoria']
-                    ];
-                    
-                    $employee = [
-                        'nombre' => $ticketInfo['empleado_nombre'],
-                        'email' => $ticketInfo['empleado_correo']
-                    ];
-                    
-                    $emailService = new EmailService();
-                    $emailService->sendTicketClosedNotification($ticketData, $employee);
-                    error_log("📧 Correo de ticket cerrado enviado para ticket #$id");
-                }
-            } catch (\Exception $e) {
-                error_log("⚠️ Error enviando correo de ticket cerrado para ticket #$id: " . $e->getMessage());
-                // No fallar la operación si el correo falla
+            if (!$ticket) {
+                AuthMiddleware::sendError('El ticket no existe', 404);
+                return;
             }
             
+            // Verificar permisos: el usuario puede cerrar si es el propietario, el técnico asignado, o es administrador/tecnico
+            $canClose = false;
+            if ($ticket['id_usuario'] == $user['id_usuario']) {
+                $canClose = true; // El propietario puede cerrar
+            } elseif (($user['rol'] === 'tecnico' || $user['rol'] === 'administrador') && 
+                     ($ticket['id_tecnico'] == $user['id_usuario'] || $user['rol'] === 'administrador')) {
+                $canClose = true; // Técnico asignado o administrador puede cerrar
+            }
+            
+            if (!$canClose) {
+                AuthMiddleware::sendError('No tienes permiso para cerrar este ticket', 403);
+                return;
+            }
+            
+            // Close ticket - ESTO ES LO MÁS IMPORTANTE
+            $this->db->query(
+                'UPDATE tickets SET estatus = "Cerrado", fecha_cierre = NOW() WHERE id_ticket = ?',
+                [$id]
+            );
+            
+            // OPERACIONES OPCIONALES después de cerrar el ticket
+            // Todas están protegidas para que NO afecten la respuesta exitosa
+            try {
+                // Insert evaluation (opcional, no crítico)
+                $this->db->query(
+                    'INSERT INTO evaluaciones (id_ticket, calificacion, comentario, fecha_evaluacion)
+                     VALUES (?, ?, ?, NOW())
+                     ON DUPLICATE KEY UPDATE calificacion = VALUES(calificacion), comentario = VALUES(comentario)',
+                    [$id, $rating, $comentarios]
+                );
+            } catch (\Throwable $e) {
+                // Capturar cualquier error (Exception o Error) pero no afectar la respuesta
+                error_log("⚠️ Error insertando evaluación del ticket #$id: " . $e->getMessage());
+            }
+    
+            // ENVIAR RESPUESTA EXITOSA - esto NUNCA debe fallar
+            // Se envía inmediatamente después de cerrar el ticket
             AuthMiddleware::sendResponse(['message' => 'Ticket cerrado exitosamente']);
+            
         } catch (\Exception $e) {
-            error_log('Error closing ticket: ' . $e->getMessage());
+            error_log('❌ Error closing ticket #' . $id . ': ' . $e->getMessage());
+            error_log('❌ Stack trace: ' . $e->getTraceAsString());
+            error_log('❌ File: ' . $e->getFile() . ' Line: ' . $e->getLine());
+            AuthMiddleware::sendError('Error interno del servidor: ' . $e->getMessage(), 500);
+        } catch (\Throwable $e) {
+            // Capturar cualquier otro tipo de error (fatal errors, etc.)
+            error_log('❌ Fatal error closing ticket #' . $id . ': ' . $e->getMessage());
+            error_log('❌ Stack trace: ' . $e->getTraceAsString());
             AuthMiddleware::sendError('Error interno del servidor', 500);
         }
-    }
-    
+    }        
     public function evaluateTicket($id)
     {
         $user = AuthMiddleware::authenticate();
@@ -1188,11 +1205,32 @@ class TicketRoutes
         
         if ($calificacion < 1 || $calificacion > 5) {
             AuthMiddleware::sendError('La calificación debe ser entre 1 y 5', 400);
+            return;
         }
         
         try {
+            // Verificar que el ticket existe y que el usuario tiene permiso para evaluarlo
+            $stmtTicket = $this->db->query(
+                'SELECT id_ticket, id_usuario FROM tickets WHERE id_ticket = ?',
+                [$id]
+            );
+            $ticket = $stmtTicket->fetch();
+            
+            if (!$ticket) {
+                AuthMiddleware::sendError('El ticket no existe', 404);
+                return;
+            }
+            
+            // Solo el propietario del ticket puede evaluarlo
+            if ($ticket['id_usuario'] != $user['id_usuario']) {
+                AuthMiddleware::sendError('No tienes permiso para evaluar este ticket', 403);
+                return;
+            }
+            
             $this->db->query(
-                'INSERT INTO evaluaciones (id_ticket, calificacion, comentario, fecha_evaluacion) VALUES (?, ?, ?, NOW())',
+                'INSERT INTO evaluaciones (id_ticket, calificacion, comentario, fecha_evaluacion) 
+                 VALUES (?, ?, ?, NOW())
+                 ON DUPLICATE KEY UPDATE calificacion = VALUES(calificacion), comentario = VALUES(comentario)',
                 [$id, $calificacion, $comentario]
             );
             
