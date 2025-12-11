@@ -765,6 +765,220 @@ HTML;
 HTML;
     }
 
+    /**
+     * Envía correo de recordatorio de evaluación
+     */
+    public function sendEvaluationReminderEmail($ticket)
+    {
+        $to = $ticket['usuario_correo'];
+        $subject = "Recordatorio: Evalúa tu ticket #{$ticket['id_ticket']}";
+        $body = $this->generateEvaluationReminderEmail($ticket);
+        
+        return $this->sendEmail($to, $subject, $body);
+    }
+    
+    /**
+     * Envía correo de cierre automático por falta de evaluación
+     */
+    public function sendEvaluationAutoClosedEmail($ticket)
+    {
+        $to = $ticket['usuario_correo'];
+        $subject = "Ticket #{$ticket['id_ticket']} cerrado automáticamente";
+        $body = $this->generateEvaluationAutoClosedEmail($ticket);
+        
+        return $this->sendEmail($to, $subject, $body);
+    }
+    
+    /**
+     * Envía correo diario con todos los tickets pendientes de evaluación
+     */
+    public function sendDailyEvaluationReminderEmail($usuario, $tickets)
+    {
+        $to = $usuario['correo'];
+        $subject = "Recordatorio diario: Tienes " . count($tickets) . " ticket(s) pendiente(s) de evaluación";
+        $body = $this->generateDailyEvaluationReminderEmail($usuario, $tickets);
+        
+        return $this->sendEmail($to, $subject, $body);
+    }
+    
+    private function generateEvaluationReminderEmail($ticket)
+    {
+        $baseUrl = $this->getFrontendUrl();
+        $ticketUrl = "$baseUrl/tickets/tracking?ticketId={$ticket['id_ticket']}";
+        $diasTranscurridos = $this->calculateDaysSince($ticket['fecha_finalizacion']);
+        
+        return <<<HTML
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Recordatorio de Evaluación</title>
+</head>
+<body style="font-family: Arial, sans-serif; background: #f8f9fa; margin:0; padding:0;">
+    <div style="max-width: 600px; margin: 30px auto; background: #fff; border-radius: 15px; box-shadow: 0 2px 8px #e0e0e0; padding: 30px;">
+        <h2 style="text-align: center; color: #FF9800; margin-bottom: 10px;">⏰ Recordatorio de Evaluación</h2>
+        <hr style="border:none; border-top:2px solid #FF9800; margin-bottom: 30px;">
+        <p>Hola <strong>{$ticket['usuario_nombre']}</strong>:</p>
+        <p>Tu ticket ha sido finalizado hace <strong>{$diasTranscurridos} día(s)</strong> y aún no lo has evaluado.</p>
+        <div style="background: #fff3e0; border-left: 6px solid #FF9800; padding: 20px; margin: 25px 0;">
+            <p><strong>Ticket #:</strong> {$ticket['id_ticket']}</p>
+            <p><strong>Descripción:</strong> " . substr($ticket['descripcion'], 0, 100) . "...</p>
+            <p><strong>Fecha de finalización:</strong> " . date('d/m/Y H:i', strtotime($ticket['fecha_finalizacion'])) . "</p>
+        </div>
+        <p style="color: #d32f2f; font-weight: bold;">⚠️ Si no evalúas tu ticket pronto, se cerrará automáticamente.</p>
+        <div style="text-align: center; margin: 30px 0;">
+            <a href="$ticketUrl" style="background-color: #FF9800; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold; font-size: 16px;">Evaluar Ticket</a>
+        </div>
+        <hr style="border:none; border-top:2px solid #ececec; margin: 32px 0 15px 0;">
+        <div style="font-size: 13px; color:#777; text-align: center;">Mesa de Ayuda - ITS<br>No responder a este correo.</div>
+    </div>
+</body>
+</html>
+HTML;
+    }
+    
+    private function generateEvaluationAutoClosedEmail($ticket)
+    {
+        $baseUrl = $this->getFrontendUrl();
+        $ticketUrl = "$baseUrl/tickets/tracking?ticketId={$ticket['id_ticket']}";
+        
+        return <<<HTML
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Ticket Cerrado Automáticamente</title>
+</head>
+<body style="font-family: Arial, sans-serif; background: #f8f9fa; margin:0; padding:0;">
+    <div style="max-width: 600px; margin: 30px auto; background: #fff; border-radius: 15px; box-shadow: 0 2px 8px #e0e0e0; padding: 30px;">
+        <h2 style="text-align: center; color: #d32f2f; margin-bottom: 10px;">⚠️ Ticket Cerrado Automáticamente</h2>
+        <hr style="border:none; border-top:2px solid #d32f2f; margin-bottom: 30px;">
+        <p>Hola <strong>{$ticket['usuario_nombre']}</strong>:</p>
+        <p>Tu ticket ha sido cerrado automáticamente por falta de evaluación después de varios días.</p>
+        <div style="background: #ffebee; border-left: 6px solid #d32f2f; padding: 20px; margin: 25px 0;">
+            <p><strong>Ticket #:</strong> {$ticket['id_ticket']}</p>
+            <p><strong>Descripción:</strong> " . substr($ticket['descripcion'], 0, 100) . "...</p>
+            <p><strong>Fecha de finalización:</strong> " . date('d/m/Y H:i', strtotime($ticket['fecha_finalizacion'])) . "</p>
+        </div>
+        <p><strong>Nota:</strong> Aún puedes evaluar este ticket si lo deseas.</p>
+        <div style="text-align: center; margin: 30px 0;">
+            <a href="$ticketUrl" style="background-color: #d32f2f; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold; font-size: 16px;">Ver y Evaluar Ticket</a>
+        </div>
+        <hr style="border:none; border-top:2px solid #ececec; margin: 32px 0 15px 0;">
+        <div style="font-size: 13px; color:#777; text-align: center;">Mesa de Ayuda - ITS<br>No responder a este correo.</div>
+    </div>
+</body>
+</html>
+HTML;
+    }
+    
+    private function generateDailyEvaluationReminderEmail($usuario, $tickets)
+    {
+        $baseUrl = $this->getFrontendUrl();
+        $ticketUrl = "$baseUrl/tickets";
+        
+        $ticketsList = '';
+        foreach ($tickets as $ticket) {
+            $diasTranscurridos = $this->calculateDaysSince($ticket['fecha_finalizacion']);
+            $ticketsList .= <<<HTML
+            <div style="background: #fff3e0; border-left: 4px solid #FF9800; padding: 15px; margin: 10px 0;">
+                <p style="margin: 5px 0;"><strong>Ticket #{$ticket['id_ticket']}</strong> - Finalizado hace {$diasTranscurridos} día(s)</p>
+                <p style="margin: 5px 0; color: #666; font-size: 14px;">" . substr($ticket['descripcion'], 0, 80) . "...</p>
+            </div>
+HTML;
+        }
+        
+        return <<<HTML
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Recordatorio Diario de Evaluaciones</title>
+</head>
+<body style="font-family: Arial, sans-serif; background: #f8f9fa; margin:0; padding:0;">
+    <div style="max-width: 600px; margin: 30px auto; background: #fff; border-radius: 15px; box-shadow: 0 2px 8px #e0e0e0; padding: 30px;">
+        <h2 style="text-align: center; color: #FF9800; margin-bottom: 10px;">📋 Recordatorio Diario</h2>
+        <hr style="border:none; border-top:2px solid #FF9800; margin-bottom: 30px;">
+        <p>Hola <strong>{$usuario['nombre']}</strong>:</p>
+        <p>Tienes <strong>" . count($tickets) . " ticket(s)</strong> pendiente(s) de evaluación:</p>
+        $ticketsList
+        <p style="color: #d32f2f; font-weight: bold; margin-top: 20px;">⚠️ Por favor, evalúa tus tickets para poder crear nuevos tickets.</p>
+        <div style="text-align: center; margin: 30px 0;">
+            <a href="$ticketUrl" style="background-color: #FF9800; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold; font-size: 16px;">Ver Mis Tickets</a>
+        </div>
+        <hr style="border:none; border-top:2px solid #ececec; margin: 32px 0 15px 0;">
+        <div style="font-size: 13px; color:#777; text-align: center;">Mesa de Ayuda - ITS<br>No responder a este correo.</div>
+    </div>
+</body>
+</html>
+HTML;
+    }
+    
+    /**
+     * Envía correo cuando un administrador regresa un ticket escalado al técnico original
+     */
+    public function sendTicketReturnedFromEscalationEmail($ticket, $technician, $comentarioAdmin = '')
+    {
+        $to = $technician['email'];
+        $subject = "Ticket #{$ticket['id']} regresado a ti";
+        $body = $this->generateTicketReturnedFromEscalationEmail($ticket, $technician, $comentarioAdmin);
+        
+        return $this->sendEmail($to, $subject, $body);
+    }
+    
+    private function generateTicketReturnedFromEscalationEmail($ticket, $technician, $comentarioAdmin)
+    {
+        $baseUrl = $this->getFrontendUrl();
+        $ticketUrl = "$baseUrl/tickets/assigned";
+        
+        $comentarioHtml = '';
+        if (!empty($comentarioAdmin)) {
+            $comentarioHtml = <<<HTML
+        <div style="background: #fff3e0; border-left: 6px solid #FF9800; padding: 20px; margin: 25px 0;">
+            <p><strong>Comentario del administrador:</strong></p>
+            <p style="font-style: italic; color: #666;">{$comentarioAdmin}</p>
+        </div>
+HTML;
+        }
+        
+        return <<<HTML
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Ticket Regresado</title>
+</head>
+<body style="font-family: Arial, sans-serif; background: #f8f9fa; margin:0; padding:0;">
+    <div style="max-width: 600px; margin: 30px auto; background: #fff; border-radius: 15px; box-shadow: 0 2px 8px #e0e0e0; padding: 30px;">
+        <h2 style="text-align: center; color: #4CAF50; margin-bottom: 10px;">Ticket Regresado</h2>
+        <hr style="border:none; border-top:2px solid #4CAF50; margin-bottom: 30px;">
+        <p>Hola <strong>{$technician['nombre']}</strong>:</p>
+        <p>Un administrador ha regresado un ticket escalado a tu atención:</p>
+        <div style="background: #e8f5e9; border-left: 6px solid #4CAF50; padding: 20px; margin: 25px 0;">
+            <p><strong>Ticket #:</strong> {$ticket['id']}</p>
+            <p><strong>Categoría:</strong> {$ticket['categoria']} - {$ticket['subcategoria']}</p>
+        </div>
+        $comentarioHtml
+        <div style="text-align: center; margin: 30px 0;">
+            <a href="$ticketUrl" style="background-color: #4CAF50; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold; font-size: 16px;">Ver Ticket</a>
+        </div>
+        <hr style="border:none; border-top:2px solid #ececec; margin: 32px 0 15px 0;">
+        <div style="font-size: 13px; color:#777; text-align: center;">Mesa de Ayuda - ITS<br>No responder a este correo.</div>
+    </div>
+</body>
+</html>
+HTML;
+    }
+    
+    private function calculateDaysSince($date)
+    {
+        if (empty($date)) return 0;
+        $dateTime = new \DateTime($date);
+        $now = new \DateTime();
+        $diff = $now->diff($dateTime);
+        return $diff->days;
+    }
+    
     public function getFrontendUrl()
     {
         return $_ENV['FRONTEND_URL'] ?? 'http://localhost:4200';

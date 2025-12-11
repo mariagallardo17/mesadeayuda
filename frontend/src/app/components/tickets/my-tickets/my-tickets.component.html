@@ -125,12 +125,19 @@
     <div class="ticket-details-content">
       <div class="detail-item">
         <label>Fecha de creación:</label>
-        <span>{{ selectedTicket.fechaCreacion | date:'dd/MM/yyyy HH:mm' }}</span>
+        <span *ngIf="selectedTicket.fechaCreacion">{{ selectedTicket.fechaCreacion | date:'dd/MM/yyyy HH:mm' }}</span>
+        <span *ngIf="!selectedTicket.fechaCreacion">No disponible</span>
       </div>
 
-      <div class="detail-item">
+      <div class="detail-item" *ngIf="canViewTechnicalInfo && selectedTicket.usuario">
+        <label>Usuario que levantó el ticket:</label>
+        <span>{{ selectedTicket.usuario.nombre }} ({{ selectedTicket.usuario.correo }})</span>
+        <span *ngIf="selectedTicket.usuario.departamento"> - {{ selectedTicket.usuario.departamento }}</span>
+      </div>
+
+      <div class="detail-item" *ngIf="!canViewTechnicalInfo && selectedTicket.usuario">
         <label>Datos del usuario:</label>
-        <span>{{ selectedTicket.usuario?.nombre }} ({{ selectedTicket.usuario?.correo }})</span>
+        <span>{{ selectedTicket.usuario.nombre }} ({{ selectedTicket.usuario.correo }})</span>
       </div>
 
       <div class="detail-item">
@@ -141,6 +148,15 @@
       <div class="detail-item">
         <label>Descripción del ticket:</label>
         <p class="ticket-description">{{ selectedTicket.descripcion }}</p>
+      </div>
+
+      <div class="detail-item" *ngIf="canViewTechnicalInfo">
+        <label>Tiempo de solución estimado:</label>
+        <span *ngIf="selectedTicket.tiempoEstimado">{{ selectedTicket.tiempoEstimado }}</span>
+        <span *ngIf="!selectedTicket.tiempoEstimado">No disponible</span>
+        <span *ngIf="selectedTicket.tiempoMaximo && selectedTicket.tiempoMaximo !== selectedTicket.tiempoEstimado">
+          (Máximo: {{ selectedTicket.tiempoMaximo }})
+        </span>
       </div>
 
       <div class="pending-details" *ngIf="selectedTicket.pendienteMotivo">
@@ -156,11 +172,6 @@
             {{ selectedTicket.pendienteActualizadoEn | date:'dd/MM/yyyy HH:mm' }}
           </span>
         </div>
-      </div>
-
-      <div class="detail-item" *ngIf="canViewTechnicalInfo">
-        <label>Tiempo aproximado de solución:</label>
-        <span>{{ selectedTicket.tiempoEstimado }}</span>
       </div>
 
       <!-- Documento de aprobación - Solo mostrar si hay archivo adjunto -->

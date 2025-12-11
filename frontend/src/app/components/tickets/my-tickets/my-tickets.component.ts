@@ -114,19 +114,36 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
 
   loadTickets(): void {
     this.isLoading = true;
+    console.log('🔄 Iniciando carga de tickets...');
     this.ticketService.getMyTickets().pipe(
       takeUntil(this.destroy$)
     ).subscribe({
       next: (tickets) => {
+        console.log('✅ Respuesta recibida del backend:', tickets);
+        console.log('✅ Tipo de respuesta:', Array.isArray(tickets) ? 'Array' : typeof tickets);
+        console.log('✅ Cantidad de tickets:', Array.isArray(tickets) ? tickets.length : 'N/A');
+        
+        if (!Array.isArray(tickets)) {
+          console.error('❌ La respuesta no es un array:', tickets);
+          this.isLoading = false;
+          alert('Error: La respuesta del servidor no es válida');
+          return;
+        }
+        
         this.tickets = tickets.filter(ticket => !ticket.reapertura);
         this.applyFilters();
         this.isLoading = false;
-        console.log('Tickets cargados:', tickets);
+        console.log('✅ Tickets procesados:', this.tickets.length);
       },
       error: (error) => {
-        console.error('Error cargando tickets:', error);
+        console.error('❌ Error cargando tickets:', error);
+        console.error('❌ Status:', error?.status);
+        console.error('❌ Status Text:', error?.statusText);
+        console.error('❌ Error completo:', JSON.stringify(error, null, 2));
+        console.error('❌ Error error:', error?.error);
         this.isLoading = false;
-        alert('Error al cargar los tickets');
+        const errorMessage = error?.error?.error || error?.error?.message || error?.message || 'Error desconocido al cargar los tickets';
+        alert('Error al cargar los tickets: ' + errorMessage);
       }
     });
   }

@@ -51,8 +51,10 @@ export interface Ticket {
     fechaEvaluacion: string;
   };
   usuario?: {
+    id?: number;
     nombre: string;
     correo: string;
+    departamento?: string;
   };
   evaluacionUltimoRecordatorio?: string;
   evaluacionRecordatorioContador?: number;
