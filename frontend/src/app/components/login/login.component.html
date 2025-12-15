@@ -1,0 +1,153 @@
+<div class="login-container">
+  <!-- Blue Header Bar -->
+  <div class="header-bar"></div>
+
+  <!-- Main Login Card -->
+  <div class="login-card">
+    <!-- Title -->
+    <h1 class="login-title">Iniciar Sesión</h1>
+
+    <!-- Logo -->
+    <div class="logo-container">
+      <img
+        src="assets/images/logo-instituto.svg"
+        alt="Instituto Tecnológico Superior de Purísima del Rincón"
+        class="institution-logo"
+        onerror="this.style.display='none'; this.nextElementSibling.style.display='block';"
+      >
+      <!-- Fallback logo si la imagen no se carga -->
+      <div class="fallback-logo" style="display: none;">
+        <div class="simple-logo">
+          <div class="gear-circle">
+            <span class="logo-text">ITS</span>
+          </div>
+        </div>
+        <div class="institution-name">
+          Instituto Tecnológico Superior<br>
+          de Purísima del Rincón
+        </div>
+      </div>
+    </div>
+
+    <!-- Login Form -->
+    <form [formGroup]="loginForm" (ngSubmit)="onSubmit()" class="login-form">
+      <!-- Email Field -->
+      <div class="form-group">
+        <label for="email" class="field-label">EMAIL</label>
+        <input
+          type="email"
+          id="email"
+          formControlName="correo"
+          class="form-input"
+          [class.error]="correo?.invalid && correo?.touched"
+          placeholder="hello@reallygreatsite.com"
+        />
+        <div *ngIf="correo?.invalid && correo?.touched" class="error-message">
+          <span *ngIf="correo?.errors?.['required']">El correo es requerido</span>
+          <span *ngIf="correo?.errors?.['email']">Ingrese un correo válido</span>
+        </div>
+      </div>
+
+      <!-- Password Field -->
+      <div class="form-group">
+        <label for="password" class="field-label">PASSWORD</label>
+        <input
+          type="password"
+          id="password"
+          formControlName="password"
+          class="form-input"
+          [class.error]="password?.invalid && password?.touched"
+          placeholder="••••••"
+        />
+        <div *ngIf="password?.invalid && password?.touched" class="error-message">
+          <span *ngIf="password?.errors?.['required']">La contraseña es requerida</span>
+          <span *ngIf="password?.errors?.['minlength']">Mínimo 6 caracteres</span>
+        </div>
+      </div>
+
+      <!-- Global Error Message -->
+      <div *ngIf="errorMessage" class="error-message global-error">
+        {{ errorMessage }}
+      </div>
+
+      <!-- Login Button -->
+      <button
+        type="submit"
+        class="login-button"
+        [disabled]="loginForm.invalid || isLoading"
+      >
+        <span *ngIf="isLoading" class="spinner"></span>
+        {{ isLoading ? 'Iniciando sesión...' : 'Iniciar Sesión' }}
+      </button>
+    </form>
+
+    <!-- Forgot Password Link -->
+    <div class="forgot-password-section">
+      <button
+        type="button"
+        class="forgot-password-link"
+        (click)="showForgotPassword = true"
+      >
+        ¿OLVIDASTE TU CONTRASEÑA?
+      </button>
+    </div>
+  </div>
+
+    <!-- Modal de recuperación de contraseña -->
+    <div *ngIf="showForgotPassword" class="modal-overlay" (click)="closeForgotPassword()">
+      <div class="modal-content" (click)="$event.stopPropagation()">
+        <div class="modal-header">
+          <h3>Recuperar Contraseña</h3>
+          <button type="button" class="close-button" (click)="closeForgotPassword()">&times;</button>
+        </div>
+
+        <div class="modal-body">
+          <p>Ingresa tu correo electrónico y te enviaremos una <b>contraseña temporal</b> para restablecer tu acceso.</p>
+
+          <form [formGroup]="forgotPasswordForm" (ngSubmit)="onForgotPasswordSubmit()">
+            <div class="form-group">
+              <label for="forgot-email"><b>Correo Electrónico</b></label>
+              <input
+                type="email"
+                id="forgot-email"
+                formControlName="correo"
+                class="form-control"
+                style="width:100%; font-size:17px; padding:12px; margin-bottom:10px;"
+                [class.error]="forgotPasswordForm.get('correo')?.invalid && forgotPasswordForm.get('correo')?.touched"
+                placeholder="ejemplo@correo.com"
+              />
+              <div *ngIf="forgotPasswordForm.get('correo')?.invalid && forgotPasswordForm.get('correo')?.touched" class="error-message">
+                <span *ngIf="forgotPasswordForm.get('correo')?.errors?.['required']">El correo es requerido</span>
+                <span *ngIf="forgotPasswordForm.get('correo')?.errors?.['email']">Ingrese un correo válido</span>
+              </div>
+            </div>
+
+            <div *ngIf="forgotPasswordMessage" class="forgot-password-message" [class.success]="forgotPasswordSuccess" [class.error]="!forgotPasswordSuccess">
+              {{ forgotPasswordMessage }}
+            </div>
+
+            <div class="modal-actions">
+              <button
+                type="button"
+                class="cancel-button"
+                (click)="closeForgotPassword()"
+              >
+                Cancelar
+              </button>
+              <button
+                type="submit"
+                class="submit-button"
+                [disabled]="forgotPasswordForm.invalid || isSendingEmail"
+              >
+                <span *ngIf="isSendingEmail" class="spinner"></span>
+                {{ isSendingEmail ? 'Enviando...' : 'Enviar Correo' }}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+
+
+
+
