@@ -106,6 +106,45 @@
         </tr>
       </tbody>
     </table>
+
+    <!-- Controles de paginación -->
+    <div class="pagination-container" *ngIf="totalPages > 1 || totalItems > 0">
+      <div class="pagination-info">
+        <span>Mostrando {{ startItem }}-{{ endItem }} de {{ totalItems }} tickets</span>
+        <select [(ngModel)]="itemsPerPage" (change)="changeItemsPerPage(itemsPerPage)" class="items-per-page">
+          <option [value]="10">10 por página</option>
+          <option [value]="20">20 por página</option>
+          <option [value]="50">50 por página</option>
+        </select>
+      </div>
+      <div class="pagination-controls" *ngIf="totalPages > 1">
+        <button 
+          class="pagination-btn" 
+          [disabled]="!hasPrevPage || isLoading"
+          (click)="goToPage(currentPage - 1)">
+          ← Anterior
+        </button>
+        <div class="page-numbers">
+          <button 
+            *ngFor="let page of getPageNumbers()"
+            class="page-number"
+            [class.active]="page === currentPage"
+            [disabled]="isLoading"
+            (click)="goToPage(page)">
+            {{ page }}
+          </button>
+        </div>
+        <button 
+          class="pagination-btn" 
+          [disabled]="!hasNextPage || isLoading"
+          (click)="goToPage(currentPage + 1)">
+          Siguiente →
+        </button>
+      </div>
+      <div class="pagination-page-info" *ngIf="totalPages > 1">
+        <span>Página {{ currentPage }} de {{ totalPages }}</span>
+      </div>
+    </div>
   </div>
 
   <!-- Modal de detalles del ticket -->

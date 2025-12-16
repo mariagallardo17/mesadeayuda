@@ -43,6 +43,16 @@ export class ReopenedTicketsComponent implements OnInit, OnDestroy {
   searchText: string = '';
   selectedEstado: string = 'todos';
 
+  // Paginación
+  currentPage: number = 1;
+  itemsPerPage: number = 10;
+  totalItems: number = 0;
+  totalPages: number = 0;
+  startItem: number = 0;
+  endItem: number = 0;
+  hasNextPage: boolean = false;
+  hasPrevPage: boolean = false;
+
   estados = [
     { value: 'Pendiente', label: 'PENDIENTE', color: 'red' },
     { value: 'En Progreso', label: 'EN PROGRESO', color: 'yellow' },
@@ -120,14 +130,40 @@ export class ReopenedTicketsComponent implements OnInit, OnDestroy {
 
   loadReopenedTickets(): void {
     this.isLoading = true;
-    this.ticketService.getReopenedTickets().pipe(
+    this.ticketService.getReopenedTickets(this.currentPage, this.itemsPerPage).pipe(
       takeUntil(this.destroy$)
     ).subscribe({
-      next: (tickets) => {
-        this.reopenedTickets = tickets.map(ticket => ({
-          ...ticket,
-          mostrarEstadoReabierto: true
-        }));
+      next: (response) => {
+        // Verificar si la respuesta tiene el nuevo formato con paginación
+        if (response && response.tickets && response.pagination) {
+          this.reopenedTickets = response.tickets.map(ticket => ({
+            ...ticket,
+            mostrarEstadoReabierto: true
+          }));
+          this.totalItems = response.pagination.total;
+          this.totalPages = response.pagination.totalPages;
+          this.startItem = response.pagination.startItem;
+          this.endItem = response.pagination.endItem;
+          this.hasNextPage = response.pagination.hasNextPage;
+          this.hasPrevPage = response.pagination.hasPrevPage;
+        } else if (Array.isArray(response)) {
+          // Compatibilidad con formato antiguo (sin paginación)
+          this.reopenedTickets = response.map(ticket => ({
+            ...ticket,
+            mostrarEstadoReabierto: true
+          }));
+          this.totalItems = this.reopenedTickets.length;
+          this.totalPages = 1;
+          this.startItem = this.reopenedTickets.length > 0 ? 1 : 0;
+          this.endItem = this.reopenedTickets.length;
+          this.hasNextPage = false;
+          this.hasPrevPage = false;
+        } else {
+          console.error('❌ La respuesta no es válida:', response);
+          this.isLoading = false;
+          alert('Error: La respuesta del servidor no es válida');
+          return;
+        }
         this.applyFilters();
         this.isLoading = false;
       },
@@ -137,6 +173,37 @@ export class ReopenedTicketsComponent implements OnInit, OnDestroy {
         alert('No fue posible cargar los tickets reabiertos.');
       }
     });
+  }
+
+  goToPage(page: number): void {
+    if (page >= 1 && page <= this.totalPages) {
+      this.currentPage = page;
+      this.loadReopenedTickets();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }
+
+  changeItemsPerPage(limit: number): void {
+    this.itemsPerPage = limit;
+    this.currentPage = 1;
+    this.loadReopenedTickets();
+  }
+
+  getPageNumbers(): number[] {
+    const pages: number[] = [];
+    const maxPages = 5;
+    let startPage = Math.max(1, this.currentPage - Math.floor(maxPages / 2));
+    let endPage = Math.min(this.totalPages, startPage + maxPages - 1);
+
+    if (endPage - startPage < maxPages - 1) {
+      startPage = Math.max(1, endPage - maxPages + 1);
+    }
+
+    for (let i = startPage; i <= endPage; i++) {
+      pages.push(i);
+    }
+
+    return pages;
   }
 
   applyFilters(): void {

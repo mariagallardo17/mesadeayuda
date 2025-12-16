@@ -37,6 +37,16 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
   searchText: string = '';
   selectedEstado: string = 'todos';
 
+  // Paginación
+  currentPage: number = 1;
+  itemsPerPage: number = 10;
+  totalItems: number = 0;
+  totalPages: number = 0;
+  startItem: number = 0;
+  endItem: number = 0;
+  hasNextPage: boolean = false;
+  hasPrevPage: boolean = false;
+
   get canViewTechnicalInfo(): boolean {
     const currentUser = this.authService.getCurrentUser();
     return currentUser?.rol === 'tecnico' || currentUser?.rol === 'administrador';
@@ -114,26 +124,41 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
 
   loadTickets(): void {
     this.isLoading = true;
-    console.log('🔄 Iniciando carga de tickets...');
-    this.ticketService.getMyTickets().pipe(
+    console.log('🔄 Iniciando carga de tickets... Página:', this.currentPage);
+    this.ticketService.getMyTickets(this.currentPage, this.itemsPerPage).pipe(
       takeUntil(this.destroy$)
     ).subscribe({
-      next: (tickets) => {
-        console.log('✅ Respuesta recibida del backend:', tickets);
-        console.log('✅ Tipo de respuesta:', Array.isArray(tickets) ? 'Array' : typeof tickets);
-        console.log('✅ Cantidad de tickets:', Array.isArray(tickets) ? tickets.length : 'N/A');
+      next: (response) => {
+        console.log('✅ Respuesta recibida del backend:', response);
         
-        if (!Array.isArray(tickets)) {
-          console.error('❌ La respuesta no es un array:', tickets);
+        // Verificar si la respuesta tiene el nuevo formato con paginación
+        if (response && response.tickets && response.pagination) {
+          this.tickets = response.tickets.filter(ticket => !ticket.reapertura);
+          this.totalItems = response.pagination.total;
+          this.totalPages = response.pagination.totalPages;
+          this.startItem = response.pagination.startItem;
+          this.endItem = response.pagination.endItem;
+          this.hasNextPage = response.pagination.hasNextPage;
+          this.hasPrevPage = response.pagination.hasPrevPage;
+        } else if (Array.isArray(response)) {
+          // Compatibilidad con formato antiguo (sin paginación)
+          this.tickets = response.filter(ticket => !ticket.reapertura);
+          this.totalItems = this.tickets.length;
+          this.totalPages = 1;
+          this.startItem = this.tickets.length > 0 ? 1 : 0;
+          this.endItem = this.tickets.length;
+          this.hasNextPage = false;
+          this.hasPrevPage = false;
+        } else {
+          console.error('❌ La respuesta no es válida:', response);
           this.isLoading = false;
           alert('Error: La respuesta del servidor no es válida');
           return;
         }
         
-        this.tickets = tickets.filter(ticket => !ticket.reapertura);
         this.applyFilters();
         this.isLoading = false;
-        console.log('✅ Tickets procesados:', this.tickets.length);
+        console.log('✅ Tickets procesados:', this.tickets.length, 'de', this.totalItems);
       },
       error: (error) => {
         console.error('❌ Error cargando tickets:', error);
@@ -146,6 +171,39 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
         alert('Error al cargar los tickets: ' + errorMessage);
       }
     });
+  }
+
+  goToPage(page: number): void {
+    if (page >= 1 && page <= this.totalPages) {
+      this.currentPage = page;
+      this.loadTickets();
+      // Scroll al inicio de la tabla
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }
+
+  changeItemsPerPage(limit: number): void {
+    this.itemsPerPage = limit;
+    this.currentPage = 1; // Resetear a la primera página
+    this.loadTickets();
+  }
+
+  getPageNumbers(): number[] {
+    const pages: number[] = [];
+    const maxPages = 5; // Mostrar máximo 5 números de página
+    let startPage = Math.max(1, this.currentPage - Math.floor(maxPages / 2));
+    let endPage = Math.min(this.totalPages, startPage + maxPages - 1);
+    
+    // Ajustar si estamos cerca del final
+    if (endPage - startPage < maxPages - 1) {
+      startPage = Math.max(1, endPage - maxPages + 1);
+    }
+    
+    for (let i = startPage; i <= endPage; i++) {
+      pages.push(i);
+    }
+    
+    return pages;
   }
 
   applyFilters(): void {

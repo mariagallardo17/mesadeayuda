@@ -28,6 +28,17 @@ export class TicketTrackingComponent implements OnInit, OnDestroy {
   reopenForm!: FormGroup;
   private destroy$ = new Subject<void>();
 
+  // Paginación
+  currentPage: number = 1;
+  itemsPerPage: number = 10;
+  totalItems: number = 0;
+  totalPages: number = 0;
+  startItem: number = 0;
+  endItem: number = 0;
+  hasNextPage: boolean = false;
+  hasPrevPage: boolean = false;
+  paginationInfo: any = null;
+
   // Estados disponibles con colores
   estados = [
     { value: 'Pendiente', label: 'PENDIENTE', color: 'red' },
@@ -69,17 +80,31 @@ export class TicketTrackingComponent implements OnInit, OnDestroy {
   loadTickets(): void {
     this.isLoading = true;
     console.log('🔄 Cargando tickets en seguimiento...');
-    this.ticketService.getMyTickets().pipe(
+    this.ticketService.getMyTickets(this.currentPage, this.itemsPerPage).pipe(
       takeUntil(this.destroy$)
     ).subscribe({
-      next: (tickets) => {
+      next: (response) => {
+        // Extraer tickets de la respuesta paginada
+        const tickets = response.tickets || [];
         console.log('📋 Tickets recibidos del backend:', tickets.length);
         console.log('📋 Lista completa de tickets:', tickets);
-        const visibles = tickets.filter(ticket => !ticket.reapertura);
+        const visibles = tickets.filter((ticket: any) => !ticket.reapertura);
         console.log('✅ Tickets visibles (sin reapertura):', visibles.length);
         console.log('✅ Lista de tickets visibles:', visibles);
         this.tickets = visibles;
         this.filteredTickets = visibles;
+        
+        // Actualizar información de paginación
+        if (response.pagination) {
+          this.paginationInfo = response.pagination;
+          this.totalItems = response.pagination.total || 0;
+          this.totalPages = response.pagination.totalPages || 0;
+          this.startItem = response.pagination.startItem || 0;
+          this.endItem = response.pagination.endItem || 0;
+          this.hasNextPage = response.pagination.hasNextPage || false;
+          this.hasPrevPage = response.pagination.hasPrevPage || false;
+        }
+        
         this.isLoading = false;
       },
       error: (error) => {
@@ -109,6 +134,54 @@ export class TicketTrackingComponent implements OnInit, OnDestroy {
   clearSearch(): void {
     this.searchForm.get('ticketId')?.setValue('');
     this.filteredTickets = this.tickets;
+  }
+
+  // Métodos de paginación
+  goToPage(page: number): void {
+    if (page >= 1 && page <= this.totalPages) {
+      this.currentPage = page;
+      this.loadTickets();
+    }
+  }
+
+  changeItemsPerPage(newLimit: number): void {
+    this.itemsPerPage = newLimit;
+    this.currentPage = 1; // Reset a la primera página
+    this.loadTickets();
+  }
+
+  getPaginationArray(): number[] {
+    const pages: number[] = [];
+    const maxPages = 5; // Máximo de números de página a mostrar
+    let startPage = Math.max(1, this.currentPage - Math.floor(maxPages / 2));
+    let endPage = Math.min(this.totalPages, startPage + maxPages - 1);
+
+    if (endPage - startPage < maxPages - 1) {
+      startPage = Math.max(1, endPage - maxPages + 1);
+    }
+
+    for (let i = startPage; i <= endPage; i++) {
+      pages.push(i);
+    }
+
+    return pages;
+  }
+
+  getDisplayedRange(): string {
+    if (this.totalItems === 0) {
+      return '0';
+    }
+    return `${this.startItem} - ${this.endItem}`;
+  }
+
+  onPageChange(page: number): void {
+    this.goToPage(page);
+  }
+
+  onItemsPerPageChange(event: Event): void {
+    const target = event.target as HTMLSelectElement;
+    const newLimit = parseInt(target.value, 10);
+    this.changeItemsPerPage(newLimit);
   }
 
   verDetalles(ticket: Ticket): void {

@@ -138,7 +138,7 @@ export class TicketService {
     );
   }
 
-  getMyTickets(): Observable<Ticket[]> {
+  getMyTickets(page: number = 1, limit: number = 10): Observable<{tickets: Ticket[], pagination: any}> {
     // Obtener token de autenticación
     const token = this.authService.getToken();
     let headers = new HttpHeaders();
@@ -147,10 +147,15 @@ export class TicketService {
       headers = headers.set('Authorization', `Bearer ${token}`);
     }
 
-    console.log('🔑 Token para getMyTickets:', token ? 'SÍ' : 'NO');
-    console.log('📤 URL:', `${this.apiUrl}/my-tickets`);
+    // Agregar parámetros de paginación
+    let params = new HttpParams()
+      .set('page', page.toString())
+      .set('limit', limit.toString());
 
-    return this.http.get<Ticket[]>(`${this.apiUrl}/my-tickets`, { headers });
+    console.log('🔑 Token para getMyTickets:', token ? 'SÍ' : 'NO');
+    console.log('📤 URL:', `${this.apiUrl}/my-tickets?page=${page}&limit=${limit}`);
+
+    return this.http.get<{tickets: Ticket[], pagination: any}>(`${this.apiUrl}/my-tickets`, { headers, params });
   }
 
 
@@ -261,7 +266,7 @@ export class TicketService {
   }
 
   // Obtener tickets escalados (solo para administradores)
-  getEscalatedTickets(): Observable<{tickets: any[], total: number}> {
+  getEscalatedTickets(page: number = 1, limit: number = 10): Observable<{tickets: any[], pagination: any}> {
     const token = this.authService.getToken();
     let headers = new HttpHeaders();
 
@@ -269,7 +274,12 @@ export class TicketService {
       headers = headers.set('Authorization', `Bearer ${token}`);
     }
 
-    return this.http.get<{tickets: any[], total: number}>(`${this.apiUrl}/escalados`, { headers });
+    // Agregar parámetros de paginación
+    let params = new HttpParams()
+      .set('page', page.toString())
+      .set('limit', limit.toString());
+
+    return this.http.get<{tickets: any[], pagination: any}>(`${this.apiUrl}/escalados`, { headers, params });
   }
 
   // Actualizar estado de un ticket (para administradores)
@@ -296,7 +306,7 @@ export class TicketService {
     return this.http.put<UpdateTicketStatusResponse>(`${this.apiUrl}/${ticketId}/status`, body, { headers });
   }
 
-  getReopenedTickets(): Observable<Ticket[]> {
+  getReopenedTickets(page: number = 1, limit: number = 10): Observable<{tickets: Ticket[], pagination: any}> {
     const token = this.authService.getToken();
     let headers = new HttpHeaders();
 
@@ -304,7 +314,12 @@ export class TicketService {
       headers = headers.set('Authorization', `Bearer ${token}`);
     }
 
-    return this.http.get<Ticket[]>(`${this.apiUrl}/reopened`, { headers });
+    // Agregar parámetros de paginación
+    let params = new HttpParams()
+      .set('page', page.toString())
+      .set('limit', limit.toString());
+
+    return this.http.get<{tickets: Ticket[], pagination: any}>(`${this.apiUrl}/reopened`, { headers, params });
   }
 
   reopenTicket(ticketId: number, observaciones: string): Observable<UpdateTicketStatusResponse> {

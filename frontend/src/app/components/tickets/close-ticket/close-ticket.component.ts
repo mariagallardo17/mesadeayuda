@@ -48,6 +48,17 @@ export class CloseTicketComponent implements OnInit, OnDestroy {
   showErrorModal = false;
   successMessage = '';
   errorMessage = '';
+
+  // Paginación
+  currentPage: number = 1;
+  itemsPerPage: number = 10;
+  totalItems: number = 0;
+  totalPages: number = 0;
+  startItem: number = 0;
+  endItem: number = 0;
+  hasNextPage: boolean = false;
+  hasPrevPage: boolean = false;
+  paginationInfo: any = null;
   private destroy$ = new Subject<void>();
 
   constructor(
@@ -291,15 +302,17 @@ export class CloseTicketComponent implements OnInit, OnDestroy {
   // Cargar tickets finalizados del usuario
   loadFinalizedTickets(): void {
     this.isSearching = true;
-    this.ticketService.getMyTickets().pipe(
+    this.ticketService.getMyTickets(this.currentPage, this.itemsPerPage).pipe(
       takeUntil(this.destroy$)
     ).subscribe({
-      next: (tickets) => {
+      next: (response) => {
+        // Extraer tickets de la respuesta paginada
+        const tickets = response.tickets || [];
         console.log('Todos los tickets recibidos:', tickets);
         // Filtrar tickets que pueden ser evaluados:
         // - Tickets finalizados sin evaluación
         // - Tickets cerrados por sistema sin evaluación
-        this.tickets = tickets.filter(ticket => {
+        this.tickets = tickets.filter((ticket: any) => {
           // Verificar que no tenga evaluación
           if (this.hasEvaluation(ticket)) {
             return false;
@@ -312,7 +325,7 @@ export class CloseTicketComponent implements OnInit, OnDestroy {
           // Mostrar si está finalizado o cerrado por sistema
           return ticket.estado === 'Finalizado' ||
                  (ticket.estado === 'Cerrado' && esCierreAutomatico);
-        }).map(ticket => {
+        }).map((ticket: any) => {
           // Limpiar la descripción si contiene una fecha al final
           // Patrón: fecha en formato dd/MM/yyyy o dd-MM-yyyy al final de la descripción
           const fechaPattern = /\s*\d{2}[\/\-]\d{2}[\/\-]\d{4}\s*$/;
@@ -321,6 +334,18 @@ export class CloseTicketComponent implements OnInit, OnDestroy {
           }
           return ticket;
         });
+        
+        // Actualizar información de paginación
+        if (response.pagination) {
+          this.paginationInfo = response.pagination;
+          this.totalItems = response.pagination.total || 0;
+          this.totalPages = response.pagination.totalPages || 0;
+          this.startItem = response.pagination.startItem || 0;
+          this.endItem = response.pagination.endItem || 0;
+          this.hasNextPage = response.pagination.hasNextPage || false;
+          this.hasPrevPage = response.pagination.hasPrevPage || false;
+        }
+        
         this.isSearching = false;
         console.log('Tickets listos para evaluar encontrados:', this.tickets);
       },
@@ -331,6 +356,54 @@ export class CloseTicketComponent implements OnInit, OnDestroy {
         this.showErrorModal = true;
       }
     });
+  }
+
+  // Métodos de paginación
+  goToPage(page: number): void {
+    if (page >= 1 && page <= this.totalPages) {
+      this.currentPage = page;
+      this.loadFinalizedTickets();
+    }
+  }
+
+  changeItemsPerPage(newLimit: number): void {
+    this.itemsPerPage = newLimit;
+    this.currentPage = 1;
+    this.loadFinalizedTickets();
+  }
+
+  getPaginationArray(): number[] {
+    const pages: number[] = [];
+    const maxPages = 5;
+    let startPage = Math.max(1, this.currentPage - Math.floor(maxPages / 2));
+    let endPage = Math.min(this.totalPages, startPage + maxPages - 1);
+
+    if (endPage - startPage < maxPages - 1) {
+      startPage = Math.max(1, endPage - maxPages + 1);
+    }
+
+    for (let i = startPage; i <= endPage; i++) {
+      pages.push(i);
+    }
+
+    return pages;
+  }
+
+  getDisplayedRange(): string {
+    if (this.totalItems === 0) {
+      return '0';
+    }
+    return `${this.startItem} - ${this.endItem}`;
+  }
+
+  onPageChange(page: number): void {
+    this.goToPage(page);
+  }
+
+  onItemsPerPageChange(event: Event): void {
+    const target = event.target as HTMLSelectElement;
+    const newLimit = parseInt(target.value, 10);
+    this.changeItemsPerPage(newLimit);
   }
 
   // Seleccionar un ticket para evaluar

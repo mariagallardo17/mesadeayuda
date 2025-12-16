@@ -176,6 +176,49 @@
       <h3>No tienes tickets aún</h3>
       <p>Cuando crees tu primer ticket, aparecerá aquí el resumen.</p>
     </div>
+
+    <!-- Controles de paginación -->
+    <div class="pagination-container" *ngIf="totalPages > 1 || totalItems > 0">
+      <div class="pagination-controls">
+        <div class="pagination-info">
+          <span>Mostrando {{ getDisplayedRange() }} de {{ totalItems }} tickets</span>
+        </div>
+        <div class="pagination-buttons">
+          <button
+            class="pagination-btn"
+            [disabled]="!hasPrevPage || isLoading"
+            (click)="goToPage(currentPage - 1)">
+            ← Anterior
+          </button>
+          <div class="page-numbers">
+            <button
+              *ngFor="let page of getPaginationArray()"
+              class="page-number"
+              [class.active]="page === currentPage"
+              (click)="goToPage(page)">
+              {{ page }}
+            </button>
+          </div>
+          <button
+            class="pagination-btn"
+            [disabled]="!hasNextPage || isLoading"
+            (click)="goToPage(currentPage + 1)">
+            Siguiente →
+          </button>
+        </div>
+        <div class="pagination-page-info" *ngIf="totalPages > 1">
+          <span>Página {{ currentPage }} de {{ totalPages }}</span>
+        </div>
+        <div class="items-per-page">
+          <label>Mostrar:</label>
+          <select [value]="itemsPerPage" (change)="onItemsPerPageChange($event)">
+            <option [value]="10">10</option>
+            <option [value]="20">20</option>
+            <option [value]="50">50</option>
+          </select>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div class="reopen-modal-overlay" *ngIf="showReopenModal">

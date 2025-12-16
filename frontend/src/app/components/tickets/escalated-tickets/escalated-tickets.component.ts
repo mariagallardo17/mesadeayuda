@@ -51,6 +51,16 @@ export class EscalatedTicketsComponent implements OnInit, OnDestroy {
   searchText: string = '';
   selectedEstado: string = 'todos';
 
+  // Paginación
+  currentPage: number = 1;
+  itemsPerPage: number = 10;
+  totalItems: number = 0;
+  totalPages: number = 0;
+  startItem: number = 0;
+  endItem: number = 0;
+  hasNextPage: boolean = false;
+  hasPrevPage: boolean = false;
+
   // Modales
   showDetailsModal = false;
   selectedTicket: EscalatedTicket | null = null;
@@ -133,11 +143,46 @@ export class EscalatedTicketsComponent implements OnInit, OnDestroy {
     this.isLoading = true;
     this.error = null;
 
-    this.ticketService.getEscalatedTickets()
+    this.ticketService.getEscalatedTickets(this.currentPage, this.itemsPerPage)
       .pipe(takeUntil(this.destroy$))
       .subscribe({
         next: (response) => {
-          this.tickets = Array.isArray(response?.tickets) ? response.tickets : [];
+          // Verificar si la respuesta tiene el nuevo formato con paginación
+          if (response && response.tickets && response.pagination) {
+            this.tickets = Array.isArray(response.tickets) ? response.tickets : [];
+            this.totalItems = response.pagination.total;
+            this.totalPages = response.pagination.totalPages;
+            this.startItem = response.pagination.startItem;
+            this.endItem = response.pagination.endItem;
+            this.hasNextPage = response.pagination.hasNextPage;
+            this.hasPrevPage = response.pagination.hasPrevPage;
+          } else if (Array.isArray(response)) {
+            // Compatibilidad con formato antiguo (sin paginación)
+            this.tickets = response;
+            this.totalItems = this.tickets.length;
+            this.totalPages = 1;
+            this.startItem = this.tickets.length > 0 ? 1 : 0;
+            this.endItem = this.tickets.length;
+            this.hasNextPage = false;
+            this.hasPrevPage = false;
+          } else if (response && response.tickets) {
+            // Formato con tickets y paginación
+            this.tickets = Array.isArray(response.tickets) ? response.tickets : [];
+            this.totalItems = response.pagination?.total || this.tickets.length;
+            this.totalPages = 1;
+            this.startItem = this.tickets.length > 0 ? 1 : 0;
+            this.endItem = this.tickets.length;
+            this.hasNextPage = false;
+            this.hasPrevPage = false;
+          } else {
+            this.tickets = [];
+            this.totalItems = 0;
+            this.totalPages = 0;
+            this.startItem = 0;
+            this.endItem = 0;
+            this.hasNextPage = false;
+            this.hasPrevPage = false;
+          }
           this.applyFilters();
           this.isLoading = false;
           console.log('Tickets escalados cargados:', this.tickets);
@@ -148,6 +193,37 @@ export class EscalatedTicketsComponent implements OnInit, OnDestroy {
           this.isLoading = false;
         }
       });
+  }
+
+  goToPage(page: number): void {
+    if (page >= 1 && page <= this.totalPages) {
+      this.currentPage = page;
+      this.loadEscalatedTickets();
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  }
+
+  changeItemsPerPage(limit: number): void {
+    this.itemsPerPage = limit;
+    this.currentPage = 1;
+    this.loadEscalatedTickets();
+  }
+
+  getPageNumbers(): number[] {
+    const pages: number[] = [];
+    const maxPages = 5;
+    let startPage = Math.max(1, this.currentPage - Math.floor(maxPages / 2));
+    let endPage = Math.min(this.totalPages, startPage + maxPages - 1);
+
+    if (endPage - startPage < maxPages - 1) {
+      startPage = Math.max(1, endPage - maxPages + 1);
+    }
+
+    for (let i = startPage; i <= endPage; i++) {
+      pages.push(i);
+    }
+
+    return pages;
   }
 
   applyFilters(): void {

@@ -53,6 +53,17 @@ export class TicketSummaryComponent implements OnInit, OnDestroy {
   isSubmittingReopen = false;
   private destroy$ = new Subject<void>();
 
+  // Paginación
+  currentPage: number = 1;
+  itemsPerPage: number = 10;
+  totalItems: number = 0;
+  totalPages: number = 0;
+  startItem: number = 0;
+  endItem: number = 0;
+  hasNextPage: boolean = false;
+  hasPrevPage: boolean = false;
+  paginationInfo: any = null;
+
   constructor(
     private ticketService: TicketService,
     private authService: AuthService,
@@ -78,11 +89,24 @@ export class TicketSummaryComponent implements OnInit, OnDestroy {
 
   loadTickets(): void {
     this.isLoading = true;
-    this.ticketService.getMyTickets().pipe(
+    this.ticketService.getMyTickets(this.currentPage, this.itemsPerPage).pipe(
       takeUntil(this.destroy$)
     ).subscribe({
-      next: (tickets) => {
-        this.tickets = tickets;
+      next: (response) => {
+        // Extraer tickets de la respuesta paginada
+        this.tickets = response.tickets || [];
+        
+        // Actualizar información de paginación
+        if (response.pagination) {
+          this.paginationInfo = response.pagination;
+          this.totalItems = response.pagination.total || 0;
+          this.totalPages = response.pagination.totalPages || 0;
+          this.startItem = response.pagination.startItem || 0;
+          this.endItem = response.pagination.endItem || 0;
+          this.hasNextPage = response.pagination.hasNextPage || false;
+          this.hasPrevPage = response.pagination.hasPrevPage || false;
+        }
+        
         this.calculateStats();
         this.isLoading = false;
       },
@@ -91,6 +115,54 @@ export class TicketSummaryComponent implements OnInit, OnDestroy {
         this.isLoading = false;
       }
     });
+  }
+
+  // Métodos de paginación
+  goToPage(page: number): void {
+    if (page >= 1 && page <= this.totalPages) {
+      this.currentPage = page;
+      this.loadTickets();
+    }
+  }
+
+  changeItemsPerPage(newLimit: number): void {
+    this.itemsPerPage = newLimit;
+    this.currentPage = 1;
+    this.loadTickets();
+  }
+
+  getPaginationArray(): number[] {
+    const pages: number[] = [];
+    const maxPages = 5;
+    let startPage = Math.max(1, this.currentPage - Math.floor(maxPages / 2));
+    let endPage = Math.min(this.totalPages, startPage + maxPages - 1);
+
+    if (endPage - startPage < maxPages - 1) {
+      startPage = Math.max(1, endPage - maxPages + 1);
+    }
+
+    for (let i = startPage; i <= endPage; i++) {
+      pages.push(i);
+    }
+
+    return pages;
+  }
+
+  getDisplayedRange(): string {
+    if (this.totalItems === 0) {
+      return '0';
+    }
+    return `${this.startItem} - ${this.endItem}`;
+  }
+
+  onPageChange(page: number): void {
+    this.goToPage(page);
+  }
+
+  onItemsPerPageChange(event: Event): void {
+    const target = event.target as HTMLSelectElement;
+    const newLimit = parseInt(target.value, 10);
+    this.changeItemsPerPage(newLimit);
   }
 
   calculateStats(): void {

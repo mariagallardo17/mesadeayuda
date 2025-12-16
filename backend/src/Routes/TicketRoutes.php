@@ -43,10 +43,25 @@ class TicketRoutes
     {
         $user = AuthMiddleware::authenticate();
 
-        error_log('getMyTickets - Usuario: ' . $user['id_usuario'] . ', Rol: ' . ($user['rol'] ?? 'N/A'));
+        // Obtener parámetros de paginación
+        $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
+        $limit = isset($_GET['limit']) ? max(1, min(100, (int)$_GET['limit'])) : 10; // Máximo 100 por página
+        $offset = ($page - 1) * $limit;
+
+        error_log('getMyTickets - Usuario: ' . $user['id_usuario'] . ', Rol: ' . ($user['rol'] ?? 'N/A') . ', Page: ' . $page . ', Limit: ' . $limit);
 
         try {
             if ($user['rol'] === 'tecnico' || $user['rol'] === 'administrador') {
+                // Obtener total de tickets para técnicos
+                $stmtCount = $this->db->query(
+                    'SELECT COUNT(*) as total
+                     FROM tickets t
+                     WHERE t.id_tecnico = ? AND t.estatus != "Escalado"',
+                    [$user['id_usuario']]
+                );
+                $countResult = $stmtCount->fetch();
+                $total = (int)$countResult['total'];
+
                 // Para técnicos: mostrar tickets asignados con información del usuario que creó el ticket
                 $stmt = $this->db->query(
                     'SELECT
@@ -74,10 +89,21 @@ class TicketRoutes
                      JOIN servicios s ON t.id_servicio = s.id_servicio
                      JOIN usuarios u ON t.id_usuario = u.id_usuario
                      WHERE t.id_tecnico = ? AND t.estatus != "Escalado"
-                     ORDER BY t.fecha_creacion DESC',
-                    [$user['id_usuario']]
+                     ORDER BY t.fecha_creacion DESC
+                     LIMIT ? OFFSET ?',
+                    [$user['id_usuario'], $limit, $offset]
                 );
             } else {
+                // Obtener total de tickets para empleados
+                $stmtCount = $this->db->query(
+                    'SELECT COUNT(*) as total
+                     FROM tickets t
+                     WHERE t.id_usuario = ?',
+                    [$user['id_usuario']]
+                );
+                $countResult = $stmtCount->fetch();
+                $total = (int)$countResult['total'];
+
                 // Para empleados: mostrar sus tickets con información del técnico asignado y del usuario que creó el ticket
                 $stmt = $this->db->query(
                     'SELECT
@@ -111,8 +137,9 @@ class TicketRoutes
                      JOIN usuarios u_creador ON t.id_usuario = u_creador.id_usuario
                      LEFT JOIN usuarios u ON t.id_tecnico = u.id_usuario
                      WHERE t.id_usuario = ?
-                     ORDER BY t.fecha_creacion DESC',
-                    [$user['id_usuario']]
+                     ORDER BY t.fecha_creacion DESC
+                     LIMIT ? OFFSET ?',
+                    [$user['id_usuario'], $limit, $offset]
                 );
             }
 
@@ -206,7 +233,25 @@ class TicketRoutes
             error_log('Tickets formateados: ' . count($formattedTickets));
             error_log('Primer ticket formateado: ' . json_encode($formattedTickets[0] ?? 'N/A'));
 
-            AuthMiddleware::sendResponse($formattedTickets);
+            // Calcular información de paginación
+            $totalPages = ceil($total / $limit);
+            $startItem = $total > 0 ? $offset + 1 : 0;
+            $endItem = min($offset + $limit, $total);
+
+            // Devolver respuesta con paginación
+            AuthMiddleware::sendResponse([
+                'tickets' => $formattedTickets,
+                'pagination' => [
+                    'total' => $total,
+                    'page' => $page,
+                    'limit' => $limit,
+                    'totalPages' => $totalPages,
+                    'startItem' => $startItem,
+                    'endItem' => $endItem,
+                    'hasNextPage' => $page < $totalPages,
+                    'hasPrevPage' => $page > 1
+                ]
+            ]);
         } catch (\Exception $e) {
             error_log('Error getting tickets: ' . $e->getMessage());
             error_log('Stack trace: ' . $e->getTraceAsString());
@@ -867,6 +912,40 @@ class TicketRoutes
 
             $estadoAnterior = $ticketOld['estatus'];
 
+            // LÓGICA DE REAPERTURA: Detectar si se está reabriendo un ticket (de Finalizado/Cerrado a otro estado)
+            $esReapertura = ($estadoAnterior === 'Finalizado' || $estadoAnterior === 'Cerrado') &&
+                           ($estatus !== 'Finalizado' && $estatus !== 'Cerrado');
+
+            if ($esReapertura) {
+                // Obtener observaciones del usuario (puede venir como comentarios o observaciones)
+                $observacionesReapertura = trim($body['comentarios'] ?? $body['observaciones'] ?? $body['observaciones_usuario'] ?? 'Reapertura solicitada sin comentarios');
+
+                try {
+                    // Insertar registro en ticketreaperturas
+                    $this->db->query(
+                        'INSERT INTO ticketreaperturas (
+                            id_ticket,
+                            usuario_id,
+                            tecnico_id,
+                            observaciones_usuario,
+                            fecha_reapertura,
+                            estado_reapertura
+                        ) VALUES (?, ?, ?, ?, NOW(), ?)',
+                        [
+                            $id,
+                            $user['id_usuario'],
+                            $ticketOld['id_tecnico'] ?? null,
+                            $observacionesReapertura,
+                            $estadoAnterior
+                        ]
+                    );
+                    error_log("✅ Reapertura registrada en ticketreaperturas para ticket #$id (estado anterior: $estadoAnterior)");
+                } catch (\Exception $e) {
+                    error_log("⚠️ Error registrando reapertura para ticket #$id: " . $e->getMessage());
+                    // No fallar el proceso si hay error al registrar la reapertura
+                }
+            }
+
             // LÓGICA ESPECIAL PARA ESTADO "PENDIENTE": Requiere motivo y tiempo estimado
             if ($estatus === 'Pendiente' && ($estadoAnterior === 'En Progreso' || $estadoAnterior === 'En proceso')) {
                 $pendienteMotivo = trim($body['pendienteMotivo'] ?? $body['motivo'] ?? '');
@@ -1316,9 +1395,25 @@ class TicketRoutes
     {
         $user = AuthMiddleware::authenticate();
 
+        // Obtener parámetros de paginación
+        $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
+        $limit = isset($_GET['limit']) ? max(1, min(100, (int)$_GET['limit'])) : 10;
+        $offset = ($page - 1) * $limit;
+
         try {
             // Different query based on user role
             if ($user['rol'] === 'empleado') {
+                // Contar total
+                $stmtCount = $this->db->query(
+                    'SELECT COUNT(*) as total
+                     FROM tickets t
+                     JOIN ticketreaperturas tr ON t.id_ticket = tr.id_ticket
+                     WHERE t.id_usuario = ?',
+                    [$user['id_usuario']]
+                );
+                $countResult = $stmtCount->fetch();
+                $total = (int)$countResult['total'];
+
                 $stmt = $this->db->query(
                     'SELECT t.id_ticket as id, s.categoria, s.subcategoria, t.descripcion,
                             s.tiempo_objetivo as tiempo_estimado, t.estatus as estado, t.prioridad,
@@ -1328,10 +1423,22 @@ class TicketRoutes
                      JOIN servicios s ON t.id_servicio = s.id_servicio
                      JOIN ticketreaperturas tr ON t.id_ticket = tr.id_ticket
                      WHERE t.id_usuario = ?
-                     ORDER BY tr.fecha_reapertura DESC',
-                    [$user['id_usuario']]
+                     ORDER BY tr.fecha_reapertura DESC
+                     LIMIT ? OFFSET ?',
+                    [$user['id_usuario'], $limit, $offset]
                 );
             } else if ($user['rol'] === 'tecnico' || $user['rol'] === 'administrador') {
+                // Contar total
+                $stmtCount = $this->db->query(
+                    'SELECT COUNT(*) as total
+                     FROM tickets t
+                     JOIN ticketreaperturas tr ON t.id_ticket = tr.id_ticket
+                     WHERE t.id_tecnico = ? OR tr.tecnico_id = ?',
+                    [$user['id_usuario'], $user['id_usuario']]
+                );
+                $countResult = $stmtCount->fetch();
+                $total = (int)$countResult['total'];
+
                 $stmt = $this->db->query(
                     'SELECT t.id_ticket as id, s.categoria, s.subcategoria, t.descripcion,
                             s.tiempo_objetivo as tiempo_estimado, t.estatus as estado, t.prioridad,
@@ -1341,15 +1448,70 @@ class TicketRoutes
                      JOIN servicios s ON t.id_servicio = s.id_servicio
                      JOIN ticketreaperturas tr ON t.id_ticket = tr.id_ticket
                      WHERE t.id_tecnico = ? OR tr.tecnico_id = ?
-                     ORDER BY tr.fecha_reapertura DESC',
-                    [$user['id_usuario'], $user['id_usuario']]
+                     ORDER BY tr.fecha_reapertura DESC
+                     LIMIT ? OFFSET ?',
+                    [$user['id_usuario'], $user['id_usuario'], $limit, $offset]
                 );
             } else {
                 AuthMiddleware::sendError('Rol de usuario no autorizado', 403);
+                return;
             }
 
             $tickets = $stmt->fetchAll();
-            AuthMiddleware::sendResponse($tickets);
+
+            // Formatear datos para el frontend (similar a getMyTickets)
+            $formattedTickets = [];
+            foreach ($tickets as $ticket) {
+                try {
+                    // Convertir snake_case a camelCase y estructurar datos
+                    $formattedTicket = [
+                        'id' => isset($ticket['id']) ? (int)$ticket['id'] : null,
+                        'categoria' => $ticket['categoria'] ?? '',
+                        'subcategoria' => $ticket['subcategoria'] ?? '',
+                        'descripcion' => $ticket['descripcion'] ?? '',
+                        'tiempoEstimado' => $ticket['tiempo_estimado'] ?? null,
+                        'tiempoObjetivo' => $ticket['tiempo_estimado'] ?? null,
+                        'estado' => $ticket['estado'] ?? 'Pendiente',
+                        'prioridad' => $ticket['prioridad'] ?? 'Media',
+                        'fechaCreacion' => $ticket['fecha_creacion'] ?? null,
+                        'fechaCierre' => $ticket['fecha_cierre'] ?? null,
+                        'reapertura' => [
+                            'observacionesUsuario' => $ticket['observaciones_usuario'] ?? null,
+                            'causaTecnico' => $ticket['causa_tecnico'] ?? null,
+                            'fechaReapertura' => $ticket['fecha_reapertura'] ?? null
+                        ]
+                    ];
+
+                    // Asegurar que el estado siempre esté presente
+                    if (empty($formattedTicket['estado'])) {
+                        $formattedTicket['estado'] = 'Pendiente';
+                    }
+
+                    $formattedTickets[] = $formattedTicket;
+                } catch (\Exception $e) {
+                    error_log('Error formateando ticket reabierto: ' . $e->getMessage());
+                    continue;
+                }
+            }
+
+            // Calcular información de paginación
+            $totalPages = ceil($total / $limit);
+            $startItem = $total > 0 ? $offset + 1 : 0;
+            $endItem = min($offset + $limit, $total);
+
+            AuthMiddleware::sendResponse([
+                'tickets' => $formattedTickets,
+                'pagination' => [
+                    'total' => $total,
+                    'page' => $page,
+                    'limit' => $limit,
+                    'totalPages' => $totalPages,
+                    'startItem' => $startItem,
+                    'endItem' => $endItem,
+                    'hasNextPage' => $page < $totalPages,
+                    'hasPrevPage' => $page > 1
+                ]
+            ]);
 
         } catch (\Exception $e) {
             error_log('Error getting reopened tickets: ' . $e->getMessage());
@@ -1368,9 +1530,31 @@ class TicketRoutes
         // Check permissions
         if ($user['rol'] !== 'tecnico' && $user['rol'] !== 'administrador') {
             AuthMiddleware::sendError('Solo los técnicos y administradores pueden ver tickets escalados', 403);
+            return;
         }
 
+        // Obtener parámetros de paginación
+        $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
+        $limit = isset($_GET['limit']) ? max(1, min(100, (int)$_GET['limit'])) : 10;
+        $offset = ($page - 1) * $limit;
+
         try {
+            // Contar total
+            $stmtCount = $this->db->query(
+                'SELECT COUNT(DISTINCT t.id_ticket) as total
+                 FROM tickets t
+                 INNER JOIN escalamientos e ON t.id_ticket = e.id_ticket
+                 WHERE t.id_tecnico = ? AND e.tecnico_nuevo_id = ?
+                 AND e.fecha_escalamiento = (
+                   SELECT MAX(fecha_escalamiento)
+                   FROM escalamientos
+                   WHERE id_ticket = t.id_ticket
+                 )',
+                [$user['id_usuario'], $user['id_usuario']]
+            );
+            $countResult = $stmtCount->fetch();
+            $total = (int)$countResult['total'];
+
             $stmt = $this->db->query(
                 'SELECT t.id_ticket as id, t.descripcion, t.prioridad, t.fecha_creacion,
                         t.estatus, s.categoria, s.subcategoria, s.tiempo_objetivo,
@@ -1389,15 +1573,30 @@ class TicketRoutes
                    FROM escalamientos
                    WHERE id_ticket = t.id_ticket
                  )
-                 ORDER BY e.fecha_escalamiento DESC, t.fecha_creacion DESC',
-                [$user['id_usuario'], $user['id_usuario']]
+                 ORDER BY e.fecha_escalamiento DESC, t.fecha_creacion DESC
+                 LIMIT ? OFFSET ?',
+                [$user['id_usuario'], $user['id_usuario'], $limit, $offset]
             );
 
             $tickets = $stmt->fetchAll();
 
+            // Calcular información de paginación
+            $totalPages = ceil($total / $limit);
+            $startItem = $total > 0 ? $offset + 1 : 0;
+            $endItem = min($offset + $limit, $total);
+
             AuthMiddleware::sendResponse([
                 'tickets' => $tickets,
-                'total' => count($tickets)
+                'pagination' => [
+                    'total' => $total,
+                    'page' => $page,
+                    'limit' => $limit,
+                    'totalPages' => $totalPages,
+                    'startItem' => $startItem,
+                    'endItem' => $endItem,
+                    'hasNextPage' => $page < $totalPages,
+                    'hasPrevPage' => $page > 1
+                ]
             ]);
 
         } catch (\Exception $e) {
