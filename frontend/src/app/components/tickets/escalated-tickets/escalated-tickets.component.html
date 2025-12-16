@@ -164,17 +164,17 @@
 
         <div class="detail-item">
           <label>Datos del usuario:</label>
-          <span>{{ selectedTicket.usuario.nombre }} ({{ selectedTicket.usuario.correo }})</span>
+          <span>{{ selectedTicket.usuario?.nombre || 'N/A' }} ({{ selectedTicket.usuario?.correo || 'Sin correo' }})</span>
         </div>
 
         <div class="detail-item">
           <label>Categoría:</label>
-          <span>{{ selectedTicket.categoria }} - {{ selectedTicket.subcategoria }}</span>
+          <span>{{ selectedTicket.categoria || 'N/A' }} - {{ selectedTicket.subcategoria || 'N/A' }}</span>
         </div>
 
         <div class="detail-item">
           <label>Descripción del ticket:</label>
-          <p class="ticket-description">{{ selectedTicket.descripcion }}</p>
+          <p class="ticket-description">{{ selectedTicket.descripcion || 'Sin descripción' }}</p>
         </div>
 
         <div class="detail-item" *ngIf="canViewTechnicalInfo && selectedTicket.tiempo_objetivo">

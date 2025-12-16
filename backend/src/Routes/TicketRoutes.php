@@ -1558,7 +1558,8 @@ class TicketRoutes
             $stmt = $this->db->query(
                 'SELECT t.id_ticket as id, t.descripcion, t.prioridad, t.fecha_creacion,
                         t.estatus, s.categoria, s.subcategoria, s.tiempo_objetivo,
-                        u.nombre as usuario_nombre, tec.nombre as tecnico_nombre,
+                        u.nombre as usuario_nombre, u.correo as usuario_correo,
+                        tec.nombre as tecnico_nombre, tec.correo as tecnico_correo,
                         tec_orig.nombre as tecnico_original_nombre,
                         e.motivo_escalamiento, e.fecha_escalamiento, e.nivel_escalamiento
                  FROM tickets t
@@ -1580,13 +1581,48 @@ class TicketRoutes
 
             $tickets = $stmt->fetchAll();
 
+            // Formatear tickets para el frontend
+            $formattedTickets = [];
+            foreach ($tickets as $ticket) {
+                $formattedTicket = [
+                    'id' => (int)$ticket['id'],
+                    'descripcion' => $ticket['descripcion'] ?? '',
+                    'prioridad' => $ticket['prioridad'] ?? 'Media',
+                    'fecha_creacion' => $ticket['fecha_creacion'] ?? null,
+                    'estatus' => $ticket['estatus'] ?? 'Pendiente',
+                    'categoria' => $ticket['categoria'] ?? '',
+                    'subcategoria' => $ticket['subcategoria'] ?? '',
+                    'tiempo_objetivo' => $ticket['tiempo_objetivo'] ?? null,
+                    'usuario' => [
+                        'nombre' => $ticket['usuario_nombre'] ?? '',
+                        'correo' => $ticket['usuario_correo'] ?? ''
+                    ],
+                    'tecnico' => null,
+                    'escalamiento' => [
+                        'motivo' => $ticket['motivo_escalamiento'] ?? null,
+                        'fecha' => $ticket['fecha_escalamiento'] ?? null,
+                        'nivel' => $ticket['nivel_escalamiento'] ?? null
+                    ]
+                ];
+
+                // Agregar técnico si existe
+                if (!empty($ticket['tecnico_nombre'])) {
+                    $formattedTicket['tecnico'] = [
+                        'nombre' => $ticket['tecnico_nombre'] ?? '',
+                        'correo' => $ticket['tecnico_correo'] ?? ''
+                    ];
+                }
+
+                $formattedTickets[] = $formattedTicket;
+            }
+
             // Calcular información de paginación
             $totalPages = ceil($total / $limit);
             $startItem = $total > 0 ? $offset + 1 : 0;
             $endItem = min($offset + $limit, $total);
 
             AuthMiddleware::sendResponse([
-                'tickets' => $tickets,
+                'tickets' => $formattedTickets,
                 'pagination' => [
                     'total' => $total,
                     'page' => $page,

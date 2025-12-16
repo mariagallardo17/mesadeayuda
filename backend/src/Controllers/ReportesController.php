@@ -27,20 +27,21 @@ class ReportesController
             error_log('📅 Fecha fin: ' . ($fechaFin ?? 'null'));
 
             // Construir condiciones de fecha
-            $condicionesFecha = $fechaInicio && $fechaFin
-                ? 'WHERE CAST(t.fecha_creacion AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)'
+            $hasFechas = $fechaInicio && $fechaFin && trim($fechaInicio) !== '' && trim($fechaFin) !== '';
+            $condicionesFecha = $hasFechas
+                ? 'WHERE CAST(fecha_creacion AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)'
                 : '';
-            $paramsFecha = $fechaInicio && $fechaFin ? [$fechaInicio, $fechaFin] : [];
+            $paramsFecha = $hasFechas ? [$fechaInicio, $fechaFin] : [];
 
-            // 1. Tickets solicitados
+            // 1. Tickets solicitados (creados en el período)
             $stmt = $this->db->query(
                 "SELECT COUNT(*) as count FROM tickets $condicionesFecha",
                 $paramsFecha
             );
             $ticketsSolicitados = (int)$stmt->fetch()['count'];
 
-            // 2. Tickets atendidos (con técnico asignado y en progreso/finalizado/cerrado)
-            $whereClause = $condicionesFecha ? $condicionesFecha . ' AND' : 'WHERE';
+            // 2. Tickets atendidos (con técnico asignado y en progreso/finalizado/cerrado) - dentro del período
+            $whereClause = $hasFechas ? $condicionesFecha . ' AND' : 'WHERE';
             $stmt = $this->db->query(
                 "SELECT COUNT(*) as count FROM tickets 
                  $whereClause 
@@ -50,7 +51,7 @@ class ReportesController
             );
             $ticketsAtendidos = (int)$stmt->fetch()['count'];
 
-            // 3. Tickets cerrados por el sistema
+            // 3. Tickets cerrados por el sistema - dentro del período
             $stmt = $this->db->query(
                 "SELECT COUNT(*) as count FROM tickets 
                  $whereClause 
@@ -60,7 +61,7 @@ class ReportesController
             );
             $ticketsCerradosPorSistema = (int)$stmt->fetch()['count'];
 
-            // 4. Tickets asignados
+            // 4. Tickets asignados - dentro del período
             $stmt = $this->db->query(
                 "SELECT COUNT(*) as count FROM tickets 
                  $whereClause 
@@ -69,14 +70,24 @@ class ReportesController
             );
             $ticketsAsignados = (int)$stmt->fetch()['count'];
 
-            // 5. Tickets pendientes (sin filtro de fecha - estado actual)
-            $stmt = $this->db->query(
-                "SELECT COUNT(*) as count FROM tickets 
-                 WHERE estatus IN ('Abierto', 'En Progreso', 'Pendiente')"
-            );
+            // 5. Tickets pendientes (estado actual, no filtrado por fecha de creación)
+            // Si hay fechas, contar solo los que fueron creados en el período Y están pendientes
+            if ($hasFechas) {
+                $stmt = $this->db->query(
+                    "SELECT COUNT(*) as count FROM tickets 
+                     $whereClause 
+                     estatus IN ('Abierto', 'En Progreso', 'Pendiente')",
+                    $paramsFecha
+                );
+            } else {
+                $stmt = $this->db->query(
+                    "SELECT COUNT(*) as count FROM tickets 
+                     WHERE estatus IN ('Abierto', 'En Progreso', 'Pendiente')"
+                );
+            }
             $ticketsPendientes = (int)$stmt->fetch()['count'];
 
-            // 6. Tickets sin cerrar (finalizados pero sin fecha_cierre)
+            // 6. Tickets sin cerrar (finalizados pero sin fecha_cierre) - dentro del período
             $stmt = $this->db->query(
                 "SELECT COUNT(*) as count FROM tickets 
                  $whereClause 
@@ -87,19 +98,21 @@ class ReportesController
             $ticketsSinCerrar = (int)$stmt->fetch()['count'];
 
             // 7. Tickets escalados
-            $fechaConditionEscalamiento = $fechaInicio && $fechaFin
+            $fechaConditionEscalamiento = $hasFechas
                 ? 'WHERE CAST(e.fecha_escalamiento AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)'
                 : '';
+            $paramsEscalamiento = $hasFechas ? [$fechaInicio, $fechaFin] : [];
             $stmt = $this->db->query(
                 "SELECT COUNT(DISTINCT e.id_ticket) as count 
                  FROM escalamientos e
                  $fechaConditionEscalamiento",
-                $paramsFecha
+                $paramsEscalamiento
             );
             $ticketsEscalados = (int)$stmt->fetch()['count'];
 
             // 8. Tickets tardíos
-            $whereClauseTardios = $condicionesFecha ? 'WHERE CAST(t.fecha_cierre AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE) AND' : 'WHERE';
+            $whereClauseTardios = $hasFechas ? 'WHERE CAST(t.fecha_cierre AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE) AND' : 'WHERE';
+            $paramsTardios = $hasFechas ? [$fechaInicio, $fechaFin] : [];
             $stmt = $this->db->query(
                 "SELECT COUNT(*) as count
                  FROM tickets t
@@ -118,24 +131,26 @@ class ReportesController
                    (CAST(s.tiempo_objetivo AS UNSIGNED) > 0)
                    AND TIMESTAMPDIFF(MINUTE, t.fecha_creacion, t.fecha_cierre) > CAST(s.tiempo_objetivo AS UNSIGNED)
                  )",
-                $paramsFecha
+                $paramsTardios
             );
             $ticketsTardios = (int)$stmt->fetch()['count'];
 
             // 9. Tickets reabiertos
-            $fechaConditionReapertura = $fechaInicio && $fechaFin
+            $fechaConditionReapertura = $hasFechas
                 ? 'WHERE CAST(tr.fecha_reapertura AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)'
                 : '';
+            $paramsReapertura = $hasFechas ? [$fechaInicio, $fechaFin] : [];
             $stmt = $this->db->query(
                 "SELECT COUNT(DISTINCT tr.id_ticket) as count
                  FROM ticketreaperturas tr
                  $fechaConditionReapertura",
-                $paramsFecha
+                $paramsReapertura
             );
             $ticketsReabiertos = (int)$stmt->fetch()['count'];
 
             // 10. Evaluaciones tardías
-            $whereClauseEval = $condicionesFecha ? 'WHERE CAST(COALESCE(t.fecha_finalizacion, t.fecha_cierre) AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE) AND' : 'WHERE';
+            $whereClauseEval = $hasFechas ? 'WHERE CAST(COALESCE(t.fecha_finalizacion, t.fecha_cierre) AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE) AND' : 'WHERE';
+            $paramsEval = $hasFechas ? [$fechaInicio, $fechaFin] : [];
             $stmt = $this->db->query(
                 "SELECT COUNT(*) as count
                  FROM tickets t
@@ -145,56 +160,63 @@ class ReportesController
                  AND e.id_evaluacion IS NULL
                  AND COALESCE(t.fecha_finalizacion, t.fecha_cierre) IS NOT NULL
                  AND DATE(COALESCE(t.fecha_finalizacion, t.fecha_cierre)) < DATE_SUB(NOW(), INTERVAL 2 DAY)",
-                $paramsFecha
+                $paramsEval
             );
             $evaluacionesTardias = (int)$stmt->fetch()['count'];
 
             // 11. Satisfacción promedio
-            $satisfaccionQuery = $fechaInicio && $fechaFin
-                ? 'SELECT AVG(calificacion) as promedio FROM Evaluaciones WHERE DATE(fecha_evaluacion) BETWEEN ? AND ?'
-                : 'SELECT AVG(calificacion) as promedio FROM Evaluaciones';
+            $satisfaccionQuery = $hasFechas
+                ? 'SELECT AVG(calificacion) as promedio FROM evaluaciones WHERE DATE(fecha_evaluacion) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)'
+                : 'SELECT AVG(calificacion) as promedio FROM evaluaciones';
             $stmt = $this->db->query($satisfaccionQuery, $paramsFecha);
             $satisfaccionResult = $stmt->fetch();
-            $satisfaccionPromedio = $satisfaccionResult['promedio'] 
+            $satisfaccionPromedio = ($satisfaccionResult['promedio'] !== null && $satisfaccionResult['promedio'] !== false)
                 ? round((float)$satisfaccionResult['promedio'], 1) 
                 : 0;
 
             // 12. MTTR (Mean Time To Resolution)
-            $mttrQuery = $fechaInicio && $fechaFin
+            $mttrQuery = $hasFechas
                 ? "SELECT AVG(TIMESTAMPDIFF(MINUTE, fecha_creacion, COALESCE(fecha_cierre, fecha_finalizacion))) as promedio_minutos
-                   FROM Tickets
+                   FROM tickets
                    WHERE estatus IN ('Finalizado', 'Cerrado')
                    AND fecha_cierre IS NOT NULL
                    AND CAST(fecha_cierre AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)"
                 : "SELECT AVG(TIMESTAMPDIFF(MINUTE, fecha_creacion, COALESCE(fecha_cierre, fecha_finalizacion))) as promedio_minutos
-                   FROM Tickets
+                   FROM tickets
                    WHERE estatus IN ('Finalizado', 'Cerrado')
                    AND fecha_cierre IS NOT NULL";
             $stmt = $this->db->query($mttrQuery, $paramsFecha);
             $mttrResult = $stmt->fetch();
-            $promedioMinutos = $mttrResult['promedio_minutos'] ?? 0;
-            $mttrHoras = floor($promedioMinutos / 60);
-            $mttrMinutos = round($promedioMinutos % 60);
+            $promedioMinutos = $mttrResult['promedio_minutos'] ?? null;
+            if ($promedioMinutos === null || $promedioMinutos === false) {
+                $promedioMinutos = 0.0;
+                $mttrHoras = 0;
+                $mttrMinutos = 0;
+            } else {
+                $promedioMinutos = (float)$promedioMinutos;
+                $mttrHoras = floor($promedioMinutos / 60);
+                $mttrMinutos = round($promedioMinutos % 60);
+            }
 
             // 13. MTTA (Mean Time To Acknowledge)
-            $mttaQuery = $fechaInicio && $fechaFin
+            $mttaQuery = $hasFechas
                 ? "SELECT AVG(TIMESTAMPDIFF(MINUTE, fecha_creacion, COALESCE(fecha_asignacion, fecha_inicio_atencion, fecha_creacion))) as promedio_minutos
-                   FROM Tickets
+                   FROM tickets
                    WHERE id_tecnico IS NOT NULL
                    AND (fecha_asignacion IS NOT NULL OR fecha_inicio_atencion IS NOT NULL)
                    AND CAST(fecha_creacion AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)"
                 : "SELECT AVG(TIMESTAMPDIFF(MINUTE, fecha_creacion, COALESCE(fecha_asignacion, fecha_inicio_atencion, fecha_creacion))) as promedio_minutos
-                   FROM Tickets
+                   FROM tickets
                    WHERE id_tecnico IS NOT NULL
                    AND (fecha_asignacion IS NOT NULL OR fecha_inicio_atencion IS NOT NULL)";
             $stmt = $this->db->query($mttaQuery, $paramsFecha);
             $mttaResult = $stmt->fetch();
-            $mttaMinutos = $mttaResult['promedio_minutos'] 
+            $mttaMinutos = ($mttaResult['promedio_minutos'] !== null && $mttaResult['promedio_minutos'] !== false)
                 ? round((float)$mttaResult['promedio_minutos']) 
                 : 0;
 
             // 14. Cumplimiento de SLA
-            $slaQuery = $fechaInicio && $fechaFin
+            $slaQuery = $hasFechas
                 ? "SELECT
                      COUNT(*) as total,
                      SUM(CASE
@@ -238,7 +260,8 @@ class ReportesController
                    WHERE t.estatus IN ('Finalizado', 'Cerrado')
                    AND t.fecha_cierre IS NOT NULL
                    AND s.tiempo_objetivo IS NOT NULL";
-            $stmt = $this->db->query($slaQuery, $paramsFecha);
+            $paramsSLA = $hasFechas ? [$fechaInicio, $fechaFin] : [];
+            $stmt = $this->db->query($slaQuery, $paramsSLA);
             $slaResult = $stmt->fetch();
             $totalSLA = (int)$slaResult['total'];
             $cumplidosSLA = (int)$slaResult['cumplidos'];
@@ -246,14 +269,14 @@ class ReportesController
                 ? round(($cumplidosSLA / $totalSLA) * 100, 1) 
                 : 0;
 
-            // 15. Actualizaciones de estado
-            $actualizacionesQuery = $fechaInicio && $fechaFin
+            // 15. Actualizaciones de estado (tickets que no están en estado Abierto)
+            $actualizacionesQuery = $hasFechas
                 ? "SELECT COUNT(*) as count
-                   FROM Tickets
+                   FROM tickets
                    $condicionesFecha
                    AND estatus != 'Abierto'"
                 : "SELECT COUNT(*) as count
-                   FROM Tickets
+                   FROM tickets
                    WHERE estatus != 'Abierto'";
             $stmt = $this->db->query($actualizacionesQuery, $paramsFecha);
             $actualizaciones = (int)$stmt->fetch()['count'];
@@ -264,11 +287,11 @@ class ReportesController
             // 16. Tickets por semana (últimas 4 semanas del período)
             $ticketsPorSemana = [0, 0, 0, 0];
             try {
-                $semanasQuery = $fechaInicio && $fechaFin
+                $semanasQuery = $hasFechas
                     ? "SELECT
                          WEEK(fecha_creacion, 1) - WEEK(CAST(? AS DATE), 1) + 1 as semana,
                          COUNT(*) as cantidad
-                       FROM Tickets
+                       FROM tickets
                        WHERE CAST(fecha_creacion AS DATE) BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
                        GROUP BY WEEK(fecha_creacion, 1)
                        ORDER BY semana
@@ -276,13 +299,13 @@ class ReportesController
                     : "SELECT
                          WEEK(fecha_creacion, 1) as semana,
                          COUNT(*) as cantidad
-                       FROM Tickets
+                       FROM tickets
                        WHERE fecha_creacion >= DATE_SUB(NOW(), INTERVAL 4 WEEK)
                        GROUP BY WEEK(fecha_creacion, 1)
                        ORDER BY semana DESC
                        LIMIT 4";
                 
-                $semanasParams = $fechaInicio && $fechaFin ? [$fechaInicio, $fechaInicio, $fechaFin] : [];
+                $semanasParams = $hasFechas ? [$fechaInicio, $fechaInicio, $fechaFin] : [];
                 $stmt = $this->db->query($semanasQuery, $semanasParams);
                 $semanasResult = $stmt->fetchAll();
                 
@@ -329,6 +352,14 @@ class ReportesController
             ];
 
             error_log('✅ Reportes generados exitosamente');
+            error_log('📊 Resumen de valores calculados:');
+            error_log('   - Tickets solicitados: ' . $ticketsSolicitados);
+            error_log('   - Tickets atendidos: ' . $ticketsAtendidos);
+            error_log('   - Tickets asignados: ' . $ticketsAsignados);
+            error_log('   - Tickets pendientes: ' . $ticketsPendientes);
+            error_log('   - Satisfacción promedio: ' . $satisfaccionPromedio);
+            error_log('   - Cumplimiento SLA: ' . $cumplimientoSLA . '%');
+            
             return $reportes;
 
         } catch (\Exception $e) {

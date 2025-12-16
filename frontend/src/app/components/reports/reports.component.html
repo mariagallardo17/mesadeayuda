@@ -1,4 +1,4 @@
-<div class="reports-container">
+<div class="reports-container" #reportsContainer>
   <div class="reports-header">
     <h1>📊 Reportes de Gestión de Servicios</h1>
     <p>Análisis completo del rendimiento del sistema de mesa de ayuda</p>
@@ -365,7 +365,11 @@
   <div class="export-section">
     <button class="export-btn" (click)="exportarReportes()" [disabled]="isLoading">
       <i class="fas fa-download"></i>
-      Exportar Reportes
+      Exportar Reportes (PDF Estructurado)
+    </button>
+    <button class="export-btn" (click)="exportarReportesVisual()" [disabled]="isLoading" style="margin-left: 10px; background-color: #28a745;">
+      <i class="fas fa-image"></i>
+      Exportar Reportes (Vista Visual Exacta)
     </button>
   </div>
 </div>

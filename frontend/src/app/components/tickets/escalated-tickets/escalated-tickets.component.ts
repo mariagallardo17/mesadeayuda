@@ -147,9 +147,11 @@ export class EscalatedTicketsComponent implements OnInit, OnDestroy {
       .pipe(takeUntil(this.destroy$))
       .subscribe({
         next: (response) => {
+          let rawTickets: any[] = [];
+          
           // Verificar si la respuesta tiene el nuevo formato con paginación
           if (response && response.tickets && response.pagination) {
-            this.tickets = Array.isArray(response.tickets) ? response.tickets : [];
+            rawTickets = Array.isArray(response.tickets) ? response.tickets : [];
             this.totalItems = response.pagination.total;
             this.totalPages = response.pagination.totalPages;
             this.startItem = response.pagination.startItem;
@@ -158,20 +160,20 @@ export class EscalatedTicketsComponent implements OnInit, OnDestroy {
             this.hasPrevPage = response.pagination.hasPrevPage;
           } else if (Array.isArray(response)) {
             // Compatibilidad con formato antiguo (sin paginación)
-            this.tickets = response;
-            this.totalItems = this.tickets.length;
+            rawTickets = response;
+            this.totalItems = rawTickets.length;
             this.totalPages = 1;
-            this.startItem = this.tickets.length > 0 ? 1 : 0;
-            this.endItem = this.tickets.length;
+            this.startItem = rawTickets.length > 0 ? 1 : 0;
+            this.endItem = rawTickets.length;
             this.hasNextPage = false;
             this.hasPrevPage = false;
           } else if (response && response.tickets) {
             // Formato con tickets y paginación
-            this.tickets = Array.isArray(response.tickets) ? response.tickets : [];
-            this.totalItems = response.pagination?.total || this.tickets.length;
+            rawTickets = Array.isArray(response.tickets) ? response.tickets : [];
+            this.totalItems = response.pagination?.total || rawTickets.length;
             this.totalPages = 1;
-            this.startItem = this.tickets.length > 0 ? 1 : 0;
-            this.endItem = this.tickets.length;
+            this.startItem = rawTickets.length > 0 ? 1 : 0;
+            this.endItem = rawTickets.length;
             this.hasNextPage = false;
             this.hasPrevPage = false;
           } else {
@@ -182,7 +184,40 @@ export class EscalatedTicketsComponent implements OnInit, OnDestroy {
             this.endItem = 0;
             this.hasNextPage = false;
             this.hasPrevPage = false;
+            this.isLoading = false;
+            return;
           }
+
+          // Los tickets ya vienen formateados del backend, solo necesitamos asegurarnos de que tengan la estructura correcta
+          console.log('📦 Tickets raw del backend:', rawTickets);
+          
+          this.tickets = rawTickets.map((ticket: any, index: number) => {
+            console.log(`📋 Procesando ticket ${index}:`, ticket);
+            
+            // El backend ya devuelve los datos formateados, pero hacemos una verificación
+            const formattedTicket: EscalatedTicket = {
+              id: ticket.id || 0,
+              descripcion: ticket.descripcion || '',
+              prioridad: ticket.prioridad || 'Media',
+              fecha_creacion: ticket.fecha_creacion || new Date().toISOString(),
+              estatus: ticket.estatus || ticket.estado || 'Pendiente',
+              categoria: ticket.categoria || '',
+              subcategoria: ticket.subcategoria || '',
+              tiempo_objetivo: ticket.tiempo_objetivo || null,
+              fecha_inicio_atencion: ticket.fecha_inicio_atencion || null,
+              tiempo_atencion_segundos: ticket.tiempo_atencion_segundos || null,
+              usuario: ticket.usuario || {
+                nombre: '',
+                correo: ''
+              },
+              tecnico: ticket.tecnico || null,
+              escalamiento: ticket.escalamiento || null
+            };
+            
+            console.log(`✅ Ticket ${index} formateado:`, formattedTicket);
+            return formattedTicket;
+          });
+
           this.applyFilters();
           this.isLoading = false;
           console.log('Tickets escalados cargados:', this.tickets);
@@ -310,9 +345,33 @@ export class EscalatedTicketsComponent implements OnInit, OnDestroy {
   }
 
   verDetalles(ticket: EscalatedTicket): void {
-    this.selectedTicket = ticket;
+    console.log('🔍 Abriendo detalles del ticket:', ticket);
+    console.log('🔍 Datos del ticket:', {
+      id: ticket.id,
+      descripcion: ticket.descripcion,
+      categoria: ticket.categoria,
+      subcategoria: ticket.subcategoria,
+      usuario: ticket.usuario,
+      tecnico: ticket.tecnico,
+      escalamiento: ticket.escalamiento
+    });
+    
+    // Usar directamente los datos que ya tenemos del backend
+    // El backend ya devuelve todos los datos necesarios formateados
+    this.selectedTicket = { 
+      ...ticket,
+      // Asegurar que todos los campos tengan valores por defecto
+      descripcion: ticket.descripcion || '',
+      categoria: ticket.categoria || '',
+      subcategoria: ticket.subcategoria || '',
+      usuario: ticket.usuario || { nombre: '', correo: '' },
+      tecnico: ticket.tecnico || null,
+      escalamiento: ticket.escalamiento || null
+    };
+    
+    console.log('✅ Ticket seleccionado:', this.selectedTicket);
     this.showDetailsModal = true;
-    // No cargar datos adicionales, usar los datos que ya tenemos
+    this.isLoading = false;
   }
 
   getEstadoColor(estado: string): string {
@@ -347,24 +406,36 @@ export class EscalatedTicketsComponent implements OnInit, OnDestroy {
     return colors[prioridad] || '#666';
   }
 
-  formatDate(dateString: string): string {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('es-ES', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric'
-    });
+  formatDate(dateString: string | null | undefined): string {
+    if (!dateString) return 'N/A';
+    try {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return 'N/A';
+      return date.toLocaleDateString('es-ES', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric'
+      });
+    } catch (e) {
+      return 'N/A';
+    }
   }
 
-  formatDateTime(dateString: string): string {
-    const date = new Date(dateString);
-    return date.toLocaleString('es-ES', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+  formatDateTime(dateString: string | null | undefined): string {
+    if (!dateString) return 'N/A';
+    try {
+      const date = new Date(dateString);
+      if (isNaN(date.getTime())) return 'N/A';
+      return date.toLocaleString('es-ES', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      });
+    } catch (e) {
+      return 'N/A';
+    }
   }
 
   /**

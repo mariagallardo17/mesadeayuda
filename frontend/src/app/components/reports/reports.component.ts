@@ -6,6 +6,7 @@ import { AuthService } from '../../services/auth.service';
 import { ReportsService, ReportesResponse } from '../../services/reports.service';
 import jsPDF from 'jspdf';
 import { Chart, registerables } from 'chart.js';
+import html2canvas from 'html2canvas';
 
 Chart.register(...registerables);
 
@@ -68,6 +69,7 @@ export class ReportsComponent implements OnInit, OnDestroy, AfterViewInit {
   @ViewChild('evaluacionesChart', { static: false }) evaluacionesChartRef!: ElementRef<HTMLCanvasElement>;
   @ViewChild('slaChart', { static: false }) slaChartRef!: ElementRef<HTMLCanvasElement>;
   @ViewChild('estadosPieChart', { static: false }) estadosPieChartRef!: ElementRef<HTMLCanvasElement>;
+  @ViewChild('reportsContainer', { static: false }) reportsContainerRef!: ElementRef<HTMLDivElement>;
 
   estadosChart: Chart | null = null;
   rendimientoChart: Chart | null = null;
@@ -272,15 +274,158 @@ export class ReportsComponent implements OnInit, OnDestroy, AfterViewInit {
     this.cargarReportes();
   }
 
-  exportarReportes(): void {
+  // Función auxiliar para capturar gráfica como imagen
+  private async capturarGrafica(chart: Chart | null, canvasRef: ElementRef<HTMLCanvasElement> | undefined): Promise<string | null> {
+    if (!chart || !canvasRef?.nativeElement) {
+      console.warn('⚠️ No hay gráfica o canvas disponible para capturar');
+      return null;
+    }
+    
+    // Esperar un momento para asegurar que la gráfica esté renderizada
+    await new Promise(resolve => setTimeout(resolve, 150));
+    
+    try {
+      const canvas = canvasRef.nativeElement;
+      
+      // Verificar que el canvas tenga dimensiones válidas
+      if (!canvas || canvas.width === 0 || canvas.height === 0) {
+        console.warn('⚠️ Canvas tiene dimensiones inválidas:', canvas.width, canvas.height);
+        return null;
+      }
+      
+      // Intentar usar el método de Chart.js primero
+      if (chart && typeof (chart as any).toBase64Image === 'function') {
+        try {
+          const imageData = (chart as any).toBase64Image('image/png', 1.0);
+          if (imageData && typeof imageData === 'string' && imageData.startsWith('data:image')) {
+            console.log('✅ Gráfica capturada usando toBase64Image(), tamaño:', imageData.length);
+            return imageData;
+          }
+        } catch (e) {
+          console.warn('⚠️ toBase64Image() falló, usando canvas directamente:', e);
+        }
+      }
+      
+      // Fallback: usar canvas directamente con calidad máxima
+      if (canvas && canvas.width > 0 && canvas.height > 0) {
+        try {
+          const imageData = canvas.toDataURL('image/png', 1.0);
+          if (imageData && typeof imageData === 'string' && imageData.startsWith('data:image')) {
+            console.log('✅ Gráfica capturada usando canvas.toDataURL(), tamaño:', imageData.length);
+            return imageData;
+          } else {
+            console.warn('⚠️ toDataURL() retornó datos inválidos');
+          }
+        } catch (e) {
+          console.error('❌ Error en toDataURL():', e);
+        }
+      }
+      
+      console.warn('⚠️ No se pudo capturar la gráfica: canvas vacío o inválido');
+      return null;
+    } catch (error) {
+      console.error('❌ Error capturando gráfica:', error);
+      return null;
+    }
+  }
+
+  // Nueva función para exportar PDF con vista visual exacta del sistema
+  async exportarReportesVisual(): Promise<void> {
     this.isLoading = true;
 
     try {
+      if (!this.reportsContainerRef?.nativeElement) {
+        alert('Error: No se puede capturar la vista. Por favor, recarga la página e intenta nuevamente.');
+        this.isLoading = false;
+        return;
+      }
+
+      // Ocultar elementos que no queremos en el PDF (botones, filtros, etc.)
+      const container = this.reportsContainerRef.nativeElement;
+      const filtersSection = container.querySelector('.filters-section') as HTMLElement;
+      const exportBtn = container.querySelector('.export-btn') as HTMLElement;
+      
+      const originalFilterDisplay = filtersSection?.style.display;
+      const originalBtnDisplay = exportBtn?.style.display;
+
+      if (filtersSection) filtersSection.style.display = 'none';
+      if (exportBtn) exportBtn.style.display = 'none';
+
+      // Esperar un momento para que los cambios se apliquen
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      // Capturar la vista como imagen
+      console.log('📸 Capturando vista visual del sistema...');
+      const canvas = await html2canvas(container, {
+        scale: 2, // Mayor resolución
+        useCORS: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        removeContainer: false,
+        allowTaint: false
+      });
+
+      // Restaurar elementos ocultos
+      if (filtersSection) filtersSection.style.display = originalFilterDisplay || '';
+      if (exportBtn) exportBtn.style.display = originalBtnDisplay || '';
+
+      // Crear PDF
+      const imgData = canvas.toDataURL('image/png');
+      const imgWidth = 210; // Ancho A4 en mm
+      const pageHeight = 297; // Alto A4 en mm
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
+      let heightLeft = imgHeight;
+
       const doc = new jsPDF('p', 'mm', 'a4');
-      let yPosition = 20;
-      const pageWidth = doc.internal.pageSize.getWidth();
-      const pageHeight = doc.internal.pageSize.getHeight();
-      const margin = 20;
+      let position = 0;
+
+      // Agregar primera página
+      doc.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+
+      // Agregar páginas adicionales si es necesario
+      while (heightLeft > 0) {
+        position = heightLeft - imgHeight;
+        doc.addPage();
+        doc.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
+
+      // Guardar PDF
+      const fileName = `reporte-mensual-visual-${new Date().toISOString().split('T')[0]}.pdf`;
+      doc.save(fileName);
+
+      this.isLoading = false;
+      alert('✅ Reporte exportado exitosamente con diseño visual exacto del sistema');
+    } catch (error) {
+      console.error('❌ Error exportando PDF visual:', error);
+      this.isLoading = false;
+      alert('Error al exportar el reporte: ' + (error instanceof Error ? error.message : 'Error desconocido'));
+    }
+  }
+
+  exportarReportes(): void {
+    this.isLoading = true;
+
+    // Asegurar que las gráficas estén creadas
+    if (!this.estadosChart || !this.semanasChart || !this.tendenciaChart) {
+      console.log('⚠️ Las gráficas no están creadas, creándolas ahora...');
+      this.crearGraficas();
+      // Esperar a que las gráficas se rendericen
+      setTimeout(() => {
+        this.exportarReportes();
+      }, 1500);
+      return;
+    }
+
+    // Función asíncrona para exportar
+    (async () => {
+      try {
+        const doc = new jsPDF('p', 'mm', 'a4');
+        let yPosition = 20;
+        const pageWidth = doc.internal.pageSize.getWidth();
+        const pageHeight = doc.internal.pageSize.getHeight();
+        const margin = 20;
 
       // Encabezado
       doc.setFontSize(20);
@@ -621,43 +766,88 @@ export class ReportsComponent implements OnInit, OnDestroy, AfterViewInit {
       doc.setFontSize(10);
       doc.setFont('helvetica', 'normal');
       doc.text('El sistema genera automáticamente un reporte para cada técnico y el administrador.', margin, yPosition);
-      yPosition += 8;
+      yPosition += 10;
 
-      // Ejemplo de reporte individual (primer técnico)
+      // Reporte de TODOS los técnicos
       if (this.rendimientoTecnicos.length > 0) {
-        const primerTecnico = this.rendimientoTecnicos[0];
-        doc.setFontSize(12);
-        doc.setFont('helvetica', 'bold');
-        doc.text(`5.1 ${primerTecnico.nombre} – Ejemplo`, margin, yPosition);
-        yPosition += 8;
-
-        doc.setFontSize(10);
-        doc.setFont('helvetica', 'normal');
-        const metricasTecnico = [
-          ['Tickets asignados', primerTecnico.ticketsAsignados || 0],
-          ['Tickets resueltos', primerTecnico.ticketsResueltos || 0],
-          ['Tickets pendientes', primerTecnico.ticketsPendientes || 0],
-          ['Tickets escalados', primerTecnico.ticketsEscalados || 0],
-          ['Tickets reabiertos', primerTecnico.ticketsReabiertos || 0],
-          ['Tickets fuera de tiempo', primerTecnico.ticketsFueraTiempo || 0],
-          ['Calificación promedio', `${primerTecnico.calificacionPromedio || 0}`]
-        ];
-
-        metricasTecnico.forEach(([label, value]) => {
-          if (yPosition > pageHeight - 30) {
+        this.rendimientoTecnicos.forEach((tecnico, index) => {
+          // Nueva página si es necesario
+          if (yPosition > pageHeight - 80) {
             doc.addPage();
             yPosition = 20;
           }
-          doc.text(`${label}:`, margin, yPosition);
-          doc.setFont('helvetica', 'bold');
-          doc.text(String(value), pageWidth - margin - 30, yPosition, { align: 'right' });
-          doc.setFont('helvetica', 'normal');
-          yPosition += 7;
-        });
 
-        yPosition += 5;
+          // Título del técnico
+          doc.setFontSize(12);
+          doc.setFont('helvetica', 'bold');
+          doc.text(`5.${index + 1} ${tecnico.nombre}`, margin, yPosition);
+          yPosition += 8;
+
+          // Tabla de métricas del técnico
+          doc.setFontSize(10);
+          doc.setFont('helvetica', 'normal');
+          
+          const metricasTecnico = [
+            ['Tickets asignados', tecnico.ticketsAsignados || 0],
+            ['Tickets resueltos', tecnico.ticketsResueltos || 0],
+            ['Tickets pendientes', tecnico.ticketsPendientes || 0],
+            ['Tickets escalados', tecnico.ticketsEscalados || 0],
+            ['Tickets reabiertos', tecnico.ticketsReabiertos || 0],
+            ['Tickets fuera de tiempo', tecnico.ticketsFueraTiempo || 0],
+            ['Calificación promedio', `${tecnico.calificacionPromedio ? tecnico.calificacionPromedio.toFixed(1) : '0.0'}`]
+          ];
+
+          metricasTecnico.forEach(([label, value]) => {
+            if (yPosition > pageHeight - 30) {
+              doc.addPage();
+              yPosition = 20;
+            }
+            doc.text(`${label}:`, margin, yPosition);
+            doc.setFont('helvetica', 'bold');
+            doc.text(String(value), pageWidth - margin - 30, yPosition, { align: 'right' });
+            doc.setFont('helvetica', 'normal');
+            yPosition += 7;
+          });
+
+          // Análisis del desempeño
+          yPosition += 5;
+          doc.setFont('helvetica', 'italic');
+          doc.setFontSize(9);
+          
+          // Generar análisis dinámico basado en métricas
+          let analisis = '';
+          const eficiencia = tecnico.ticketsAsignados > 0 
+            ? parseFloat(((tecnico.ticketsResueltos || 0) / tecnico.ticketsAsignados * 100).toFixed(0))
+            : 0;
+          
+          if (eficiencia >= 80 && (tecnico.calificacionPromedio || 0) >= 4.0) {
+            analisis = 'El técnico muestra excelente eficiencia y alta satisfacción del usuario.';
+          } else if (eficiencia >= 60 && (tecnico.calificacionPromedio || 0) >= 3.5) {
+            analisis = 'El técnico muestra buena eficiencia y satisfacción aceptable.';
+          } else if ((tecnico.ticketsReabiertos || 0) > 2 || (tecnico.ticketsFueraTiempo || 0) > 2) {
+            analisis = 'Se recomienda mejorar el seguimiento y la documentación para reducir reaperturas y retrasos.';
+          } else {
+            analisis = 'El técnico muestra desempeño aceptable con oportunidades de mejora.';
+          }
+          
+          const analisisLines = doc.splitTextToSize(`Análisis del desempeño: ${analisis}`, pageWidth - 2 * margin);
+          analisisLines.forEach((line: string) => {
+            if (yPosition > pageHeight - 30) {
+              doc.addPage();
+              yPosition = 20;
+            }
+            doc.text(line, margin, yPosition);
+            yPosition += 6;
+          });
+          
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(10);
+          yPosition += 10;
+        });
+      } else {
+        doc.setFontSize(10);
         doc.setFont('helvetica', 'italic');
-        doc.text('Análisis del desempeño: El técnico muestra eficiencia y buena satisfacción; se recomienda mejorar la documentación.', margin, yPosition);
+        doc.text('No hay datos de técnicos disponibles para este período.', margin, yPosition);
         yPosition += 10;
       }
 
@@ -670,28 +860,200 @@ export class ReportsComponent implements OnInit, OnDestroy, AfterViewInit {
         doc.text(`Página ${i} de ${totalPages}`, pageWidth / 2, pageHeight - 10, { align: 'center' });
       }
 
-      // 6. Gráficas que el Sistema Debe Incluir
+      // 6. Gráficas del Sistema
       doc.setFontSize(14);
       doc.setFont('helvetica', 'bold');
       if (yPosition > pageHeight - 50) {
         doc.addPage();
         yPosition = 20;
       }
-      doc.text('6. Gráficas que el Sistema Debe Incluir', margin, yPosition);
-      yPosition += 8;
-      doc.setFontSize(10);
-      doc.setFont('helvetica', 'normal');
-      const graficasText = 'Estas gráficas se incorporan en el PDF exportado: Gráfica de barras → Tickets por semana, Línea → Tendencia de tickets atendidos vs. pendientes, Barras comparativas → Tickets por técnico, Histograma → Evaluaciones del usuario, Radar → Cumplimiento de SLA por técnico, Gráfica de pastel → tickets por estado (todos los estados).';
-      const graficasLines = doc.splitTextToSize(graficasText, pageWidth - 2 * margin);
-      graficasLines.forEach((line: string) => {
-        if (yPosition > pageHeight - 30) {
-          doc.addPage();
-          yPosition = 20;
-        }
-        doc.text(line, margin, yPosition);
-        yPosition += 6;
-      });
+      // Agregar título de sección
+      doc.text('6. Graficas del Sistema', margin, yPosition);
       yPosition += 10;
+
+      // Capturar y agregar gráficas al PDF
+      const chartWidth = pageWidth - 2 * margin;
+      const chartHeight = 70; // Altura en mm para cada gráfica (aumentada para mejor visualización)
+
+      console.log('📸 Iniciando captura de gráficas para PDF...');
+      
+      // Esperar un momento adicional para asegurar que todas las gráficas estén completamente renderizadas
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      // 6.1 Gráfica de Tickets por Semana
+      if (this.semanasChart && this.semanasChartRef) {
+        console.log('📸 Capturando gráfica de semanas...');
+        const semanasImage = await this.capturarGrafica(this.semanasChart, this.semanasChartRef);
+        if (semanasImage) {
+          console.log('✅ Gráfica de semanas capturada exitosamente');
+          if (yPosition + chartHeight > pageHeight - 20) {
+            doc.addPage();
+            yPosition = 20;
+          }
+          doc.setFontSize(11);
+          doc.setFont('helvetica', 'bold');
+          doc.text('6.1 Tickets por Semana', margin, yPosition);
+          yPosition += 6;
+          try {
+            doc.addImage(semanasImage, 'PNG', margin, yPosition, chartWidth, chartHeight, undefined, 'FAST');
+            yPosition += chartHeight + 10;
+          } catch (error) {
+            console.error('❌ Error agregando imagen de semanas:', error);
+            doc.text('Error al cargar la gráfica de Tickets por Semana', margin, yPosition);
+            yPosition += 15;
+          }
+        }
+      }
+
+      // 6.2 Gráfica de Tendencia
+      if (this.tendenciaChart && this.tendenciaChartRef) {
+        console.log('📸 Capturando gráfica de tendencia...');
+        const tendenciaImage = await this.capturarGrafica(this.tendenciaChart, this.tendenciaChartRef);
+        if (tendenciaImage) {
+          console.log('✅ Gráfica de tendencia capturada exitosamente');
+          if (yPosition + chartHeight > pageHeight - 20) {
+            doc.addPage();
+            yPosition = 20;
+          }
+          doc.setFontSize(11);
+          doc.setFont('helvetica', 'bold');
+          doc.text('6.2 Tendencia: Tickets Atendidos vs. Pendientes', margin, yPosition);
+          yPosition += 6;
+          try {
+            doc.addImage(tendenciaImage, 'PNG', margin, yPosition, chartWidth, chartHeight, undefined, 'FAST');
+            yPosition += chartHeight + 10;
+          } catch (error) {
+            console.error('❌ Error agregando imagen de tendencia:', error);
+            doc.text('Error al cargar la gráfica de Tendencia', margin, yPosition);
+            yPosition += 15;
+          }
+        }
+      }
+
+      // 6.3 Gráfica de Distribución por Estado (Barras)
+      if (this.estadosChart && this.estadosChartRef) {
+        console.log('📸 Capturando gráfica de estados (barras)...');
+        const estadosImage = await this.capturarGrafica(this.estadosChart, this.estadosChartRef);
+        if (estadosImage) {
+          console.log('✅ Gráfica de estados capturada exitosamente');
+          if (yPosition + chartHeight > pageHeight - 20) {
+            doc.addPage();
+            yPosition = 20;
+          }
+          doc.setFontSize(11);
+          doc.setFont('helvetica', 'bold');
+          doc.text('6.3 Distribución de Tickets por Estado', margin, yPosition);
+          yPosition += 6;
+          try {
+            doc.addImage(estadosImage, 'PNG', margin, yPosition, chartWidth, chartHeight, undefined, 'FAST');
+            yPosition += chartHeight + 10;
+          } catch (error) {
+            console.error('❌ Error agregando imagen de estados:', error);
+            doc.text('Error al cargar la gráfica de Distribución por Estado', margin, yPosition);
+            yPosition += 15;
+          }
+        }
+      }
+
+      // 6.4 Gráfica de Pastel de Estados
+      if (this.estadosPieChart && this.estadosPieChartRef) {
+        console.log('📸 Capturando gráfica de estados (pastel)...');
+        const pieImage = await this.capturarGrafica(this.estadosPieChart, this.estadosPieChartRef);
+        if (pieImage) {
+          console.log('✅ Gráfica de pastel capturada exitosamente');
+          if (yPosition + chartHeight > pageHeight - 20) {
+            doc.addPage();
+            yPosition = 20;
+          }
+          doc.setFontSize(11);
+          doc.setFont('helvetica', 'bold');
+          doc.text('6.4 Distribución de Tickets por Estado (Pastel)', margin, yPosition);
+          yPosition += 6;
+          try {
+            doc.addImage(pieImage, 'PNG', margin, yPosition, chartWidth, chartHeight, undefined, 'FAST');
+            yPosition += chartHeight + 10;
+          } catch (error) {
+            console.error('❌ Error agregando imagen de pastel:', error);
+            doc.text('Error al cargar la gráfica de Pastel', margin, yPosition);
+            yPosition += 15;
+          }
+        }
+      }
+
+      // 6.5 Gráfica de Rendimiento por Técnico
+      if (this.rendimientoChart && this.rendimientoChartRef) {
+        console.log('📸 Capturando gráfica de rendimiento...');
+        const rendimientoImage = await this.capturarGrafica(this.rendimientoChart, this.rendimientoChartRef);
+        if (rendimientoImage) {
+          console.log('✅ Gráfica de rendimiento capturada exitosamente');
+          if (yPosition + chartHeight > pageHeight - 20) {
+            doc.addPage();
+            yPosition = 20;
+          }
+          doc.setFontSize(11);
+          doc.setFont('helvetica', 'bold');
+          doc.text('6.5 Rendimiento por Técnico', margin, yPosition);
+          yPosition += 6;
+          try {
+            doc.addImage(rendimientoImage, 'PNG', margin, yPosition, chartWidth, chartHeight, undefined, 'FAST');
+            yPosition += chartHeight + 10;
+          } catch (error) {
+            console.error('❌ Error agregando imagen de rendimiento:', error);
+            doc.text('Error al cargar la gráfica de Rendimiento', margin, yPosition);
+            yPosition += 15;
+          }
+        }
+      }
+
+      // 6.6 Gráfica de Evaluaciones
+      if (this.evaluacionesChart && this.evaluacionesChartRef) {
+        console.log('📸 Capturando gráfica de evaluaciones...');
+        const evaluacionesImage = await this.capturarGrafica(this.evaluacionesChart, this.evaluacionesChartRef);
+        if (evaluacionesImage) {
+          console.log('✅ Gráfica de evaluaciones capturada exitosamente');
+          if (yPosition + chartHeight > pageHeight - 20) {
+            doc.addPage();
+            yPosition = 20;
+          }
+          doc.setFontSize(11);
+          doc.setFont('helvetica', 'bold');
+          doc.text('6.6 Distribución de Evaluaciones de Usuarios', margin, yPosition);
+          yPosition += 6;
+          try {
+            doc.addImage(evaluacionesImage, 'PNG', margin, yPosition, chartWidth, chartHeight, undefined, 'FAST');
+            yPosition += chartHeight + 10;
+          } catch (error) {
+            console.error('❌ Error agregando imagen de evaluaciones:', error);
+            doc.text('Error al cargar la gráfica de Evaluaciones', margin, yPosition);
+            yPosition += 15;
+          }
+        }
+      }
+
+      // 6.7 Gráfica de SLA
+      if (this.slaChart && this.slaChartRef) {
+        console.log('📸 Capturando gráfica de SLA...');
+        const slaImage = await this.capturarGrafica(this.slaChart, this.slaChartRef);
+        if (slaImage) {
+          console.log('✅ Gráfica de SLA capturada exitosamente');
+          if (yPosition + chartHeight > pageHeight - 20) {
+            doc.addPage();
+            yPosition = 20;
+          }
+          doc.setFontSize(11);
+          doc.setFont('helvetica', 'bold');
+          doc.text('6.7 Cumplimiento de SLA por Técnico', margin, yPosition);
+          yPosition += 6;
+          try {
+            doc.addImage(slaImage, 'PNG', margin, yPosition, chartWidth, chartHeight, undefined, 'FAST');
+            yPosition += chartHeight + 10;
+          } catch (error) {
+            console.error('❌ Error agregando imagen de SLA:', error);
+            doc.text('Error al cargar la gráfica de SLA', margin, yPosition);
+            yPosition += 15;
+          }
+        }
+      }
 
       // 7. Interpretación General del Mes
       doc.setFontSize(14);
@@ -744,17 +1106,18 @@ export class ReportsComponent implements OnInit, OnDestroy, AfterViewInit {
         yPosition += 6;
       });
 
-      // Guardar PDF
-      const fileName = `reporte-mensual-${new Date().toISOString().split('T')[0]}.pdf`;
-      doc.save(fileName);
+        // Guardar PDF
+        const fileName = `reporte-mensual-${new Date().toISOString().split('T')[0]}.pdf`;
+        doc.save(fileName);
 
-    this.isLoading = false;
-      alert('Reporte exportado a PDF exitosamente');
-    } catch (error) {
-      console.error('Error exportando a PDF:', error);
-      this.isLoading = false;
-      alert('Error al exportar el reporte a PDF: ' + (error instanceof Error ? error.message : 'Error desconocido'));
-    }
+        this.isLoading = false;
+        alert('Reporte exportado a PDF exitosamente con todas las gráficas');
+      } catch (error) {
+        console.error('Error exportando a PDF:', error);
+        this.isLoading = false;
+        alert('Error al exportar el reporte a PDF: ' + (error instanceof Error ? error.message : 'Error desconocido'));
+      }
+    })();
   }
 
   crearGraficas(): void {
