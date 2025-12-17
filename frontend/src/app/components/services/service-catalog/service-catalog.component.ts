@@ -4,6 +4,7 @@ import { FormBuilder, FormGroup, Validators, ReactiveFormsModule, FormsModule } 
 import { Subject, takeUntil, debounceTime, distinctUntilChanged } from 'rxjs';
 import { ServiceCatalogService } from '../../../services/service-catalog.service';
 import { UserService } from '../../../services/user.service';
+import { TicketService } from '../../../services/ticket.service';
 import { ServiceCatalog, CreateServiceRequest, UpdateServiceRequest } from '../../../models/service-catalog.model';
 import { User } from '../../../models/user.model';
 
@@ -29,6 +30,7 @@ export class ServiceCatalogComponent implements OnInit, OnDestroy {
   serviceLevels: string[] = [];
   technicians: User[] = [];
   responsableInicialOptions: Array<{value: string, label: string}> = [];
+  escalamientoOptions: Array<{value: string, label: string}> = [];
 
   // Modales de confirmación y éxito/error
   showSuccessModal = false;
@@ -46,6 +48,7 @@ export class ServiceCatalogComponent implements OnInit, OnDestroy {
   constructor(
     private serviceCatalogService: ServiceCatalogService,
     private userService: UserService,
+    private ticketService: TicketService,
     private fb: FormBuilder
   ) {
     this.addServiceForm = this.fb.group({
@@ -81,7 +84,9 @@ export class ServiceCatalogComponent implements OnInit, OnDestroy {
     this.loadServiceLevels();
     this.loadTechnicians();
     // Inicializar con RITO al menos
-    this.responsableInicialOptions = [{ value: 'RITO', label: 'RITO' }];
+    const defaultOptions = [{ value: 'RITO', label: 'RITO' }];
+    this.responsableInicialOptions = defaultOptions;
+    this.escalamientoOptions = defaultOptions;
   }
 
   ngOnDestroy(): void {
@@ -130,39 +135,86 @@ export class ServiceCatalogComponent implements OnInit, OnDestroy {
   }
 
   loadTechnicians(): void {
-    this.userService.getTechnicians()
+    console.log('🔍 Cargando técnicos para catálogo de servicios...');
+    
+    // Cargar técnicos directamente desde la API usando TicketService
+    this.ticketService.getTechnicians()
       .pipe(takeUntil(this.destroy$))
-      .subscribe(technicians => {
-        this.technicians = technicians;
-        this.updateResponsableInicialOptions();
+      .subscribe({
+        next: (technicians) => {
+          console.log('✅ Técnicos cargados desde API:', technicians);
+          // Mapear los técnicos al formato User
+          this.technicians = technicians.map((tech: any) => ({
+            id: tech.id,
+            nombre: tech.nombre || '',
+            apellido: '', // El backend solo devuelve nombre completo
+            correo: tech.correo || '',
+            rol: tech.rol || 'tecnico',
+            activo: true,
+            nombreCompleto: tech.nombre || ''
+          } as User));
+          this.updateResponsableInicialOptions();
+        },
+        error: (error) => {
+          console.error('❌ Error cargando técnicos desde API:', error);
+          // Fallback: intentar desde UserService
+          console.log('⚠️ Intentando cargar desde UserService como fallback...');
+          this.userService.getUsers()
+            .pipe(takeUntil(this.destroy$))
+            .subscribe(() => {
+              this.userService.getTechnicians()
+                .pipe(takeUntil(this.destroy$))
+                .subscribe(techs => {
+                  console.log('✅ Técnicos desde UserService (fallback):', techs);
+                  this.technicians = techs;
+                  this.updateResponsableInicialOptions();
+                });
+            });
+        }
       });
   }
 
-  // Actualizar opciones de responsable inicial (técnicos + RITO)
+  // Actualizar opciones de responsable inicial y escalamiento (técnicos + RITO)
   updateResponsableInicialOptions(): void {
     try {
       const options: Array<{value: string, label: string}> = [];
+      const addedValues = new Set<string>(); // Para evitar duplicados
 
       // Agregar técnicos
       if (this.technicians && Array.isArray(this.technicians)) {
         this.technicians.forEach(technician => {
-          options.push({
-            value: technician.nombre,
-            label: `${technician.nombre} ${technician.apellido || ''}`.trim()
-          });
+          const nombreCompleto = `${technician.nombre} ${technician.apellido || ''}`.trim();
+          const nombreValue = technician.nombre.trim();
+          
+          // Solo agregar si no está duplicado (comparar en mayúsculas para evitar duplicados por case)
+          const nombreUpper = nombreValue.toUpperCase();
+          if (!addedValues.has(nombreUpper)) {
+            options.push({
+              value: nombreValue,
+              label: nombreCompleto || nombreValue
+            });
+            addedValues.add(nombreUpper);
+          }
         });
       }
 
-      // Agregar RITO como opción especial
-      options.push({
-        value: 'RITO',
-        label: 'RITO'
-      });
+      // Agregar RITO como opción especial solo si no está ya en la lista
+      if (!addedValues.has('RITO')) {
+        options.push({
+          value: 'RITO',
+          label: 'RITO'
+        });
+        addedValues.add('RITO');
+      }
 
+      // Actualizar ambas opciones (responsable inicial y escalamiento usan los mismos técnicos)
       this.responsableInicialOptions = options;
+      this.escalamientoOptions = options;
     } catch (error) {
       console.error('Error en updateResponsableInicialOptions:', error);
-      this.responsableInicialOptions = [{ value: 'RITO', label: 'RITO' }];
+      const defaultOptions = [{ value: 'RITO', label: 'RITO' }];
+      this.responsableInicialOptions = defaultOptions;
+      this.escalamientoOptions = defaultOptions;
     }
   }
 

@@ -118,14 +118,14 @@
         </select>
       </div>
       <div class="pagination-controls" *ngIf="totalPages > 1">
-        <button 
-          class="pagination-btn" 
+        <button
+          class="pagination-btn"
           [disabled]="!hasPrevPage || isLoading"
           (click)="goToPage(currentPage - 1)">
           ← Anterior
         </button>
         <div class="page-numbers">
-          <button 
+          <button
             *ngFor="let page of getPageNumbers()"
             class="page-number"
             [class.active]="page === currentPage"
@@ -134,8 +134,8 @@
             {{ page }}
           </button>
         </div>
-        <button 
-          class="pagination-btn" 
+        <button
+          class="pagination-btn"
           [disabled]="!hasNextPage || isLoading"
           (click)="goToPage(currentPage + 1)">
           Siguiente →
@@ -369,7 +369,7 @@
             placeholder="Ejemplo: Esperando confirmación del proveedor"
           ></textarea>
           <div class="error-message" *ngIf="pendingForm.get('motivo')?.invalid && pendingForm.get('motivo')?.touched">
-            *Este campo es obligatorio (máximo 500 caracteres)
+            *Este campo es obligatorio
           </div>
         </div>
 

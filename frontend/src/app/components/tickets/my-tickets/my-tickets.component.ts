@@ -130,7 +130,7 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
     ).subscribe({
       next: (response) => {
         console.log('✅ Respuesta recibida del backend:', response);
-        
+
         // Verificar si la respuesta tiene el nuevo formato con paginación
         if (response && response.tickets && response.pagination) {
           this.tickets = response.tickets.filter(ticket => !ticket.reapertura);
@@ -155,7 +155,7 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
           alert('Error: La respuesta del servidor no es válida');
           return;
         }
-        
+
         this.applyFilters();
         this.isLoading = false;
         console.log('✅ Tickets procesados:', this.tickets.length, 'de', this.totalItems);
@@ -193,16 +193,16 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
     const maxPages = 5; // Mostrar máximo 5 números de página
     let startPage = Math.max(1, this.currentPage - Math.floor(maxPages / 2));
     let endPage = Math.min(this.totalPages, startPage + maxPages - 1);
-    
+
     // Ajustar si estamos cerca del final
     if (endPage - startPage < maxPages - 1) {
       startPage = Math.max(1, endPage - maxPages + 1);
     }
-    
+
     for (let i = startPage; i <= endPage; i++) {
       pages.push(i);
     }
-    
+
     return pages;
   }
 
@@ -496,7 +496,7 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
 
     this.isLoading = true;
     this.ticketService.updateTicketStatus(this.ticketPendienteSeleccionado.id, 'Pendiente', {
-      comentarios: motivo,
+      motivo: motivo,
       pendienteTiempoEstimado: tiempoEstimado
     }).pipe(
       takeUntil(this.destroy$)

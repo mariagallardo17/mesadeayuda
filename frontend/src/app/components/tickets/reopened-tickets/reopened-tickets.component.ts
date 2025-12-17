@@ -403,7 +403,7 @@ export class ReopenedTicketsComponent implements OnInit, OnDestroy {
     this.isUpdatingStatus = true;
 
     this.ticketService.updateTicketStatus(ticket.id, 'Pendiente', {
-      comentarios: motivo,
+      motivo: motivo,
       pendienteTiempoEstimado: tiempoEstimado
     }).pipe(
       takeUntil(this.destroy$)

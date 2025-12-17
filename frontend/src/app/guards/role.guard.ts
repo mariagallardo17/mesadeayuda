@@ -23,12 +23,23 @@ export class RoleGuard implements CanActivate {
     return this.authService.currentUser$.pipe(
       take(1),
       map(user => {
-        if (user && expectedRoles.includes(user.rol)) {
-          return true;
-        } else {
+        if (!user) {
           this.router.navigate(['/dashboard']);
           return false;
         }
+
+        // Los administradores siempre tienen acceso a todo
+        if (user.rol === 'administrador') {
+          return true;
+        }
+
+        // Verificar si el rol del usuario está en los roles permitidos
+        if (expectedRoles && expectedRoles.includes(user.rol)) {
+          return true;
+        }
+
+        this.router.navigate(['/dashboard']);
+        return false;
       })
     );
   }

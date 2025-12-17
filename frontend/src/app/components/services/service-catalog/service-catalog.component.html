@@ -221,14 +221,17 @@
 
       <div class="form-group">
         <label for="add-escalamiento">Escalamiento</label>
-        <textarea
+        <select
           id="add-escalamiento"
           formControlName="escalamiento"
-          class="form-textarea"
+          class="form-select"
           [class.error]="addEscalamiento?.invalid && addEscalamiento?.touched"
-          placeholder="Describa el proceso de escalamiento"
-          rows="2"
-        ></textarea>
+        >
+          <option value="">Seleccione un técnico</option>
+          <option *ngFor="let option of escalamientoOptions" [value]="option.value">
+            {{ option.label }}
+          </option>
+        </select>
         <div class="error-message" *ngIf="addEscalamiento?.invalid && addEscalamiento?.touched">
           <span *ngIf="addEscalamiento?.errors?.['required']">El escalamiento es requerido</span>
         </div>
@@ -384,14 +387,17 @@
 
       <div class="form-group">
         <label for="edit-escalamiento">Escalamiento</label>
-        <textarea
+        <select
           id="edit-escalamiento"
           formControlName="escalamiento"
-          class="form-textarea"
+          class="form-select"
           [class.error]="editEscalamiento?.invalid && editEscalamiento?.touched"
-          placeholder="Describa el proceso de escalamiento"
-          rows="2"
-        ></textarea>
+        >
+          <option value="">Seleccione un técnico</option>
+          <option *ngFor="let option of escalamientoOptions" [value]="option.value">
+            {{ option.label }}
+          </option>
+        </select>
         <div class="error-message" *ngIf="editEscalamiento?.invalid && editEscalamiento?.touched">
           <span *ngIf="editEscalamiento?.errors?.['required']">El escalamiento es requerido</span>
         </div>

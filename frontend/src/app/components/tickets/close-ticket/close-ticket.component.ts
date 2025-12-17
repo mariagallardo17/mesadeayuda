@@ -334,7 +334,7 @@ export class CloseTicketComponent implements OnInit, OnDestroy {
           }
           return ticket;
         });
-        
+
         // Actualizar información de paginación
         if (response.pagination) {
           this.paginationInfo = response.pagination;
@@ -345,7 +345,7 @@ export class CloseTicketComponent implements OnInit, OnDestroy {
           this.hasNextPage = response.pagination.hasNextPage || false;
           this.hasPrevPage = response.pagination.hasPrevPage || false;
         }
-        
+
         this.isSearching = false;
         console.log('Tickets listos para evaluar encontrados:', this.tickets);
       },

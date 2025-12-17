@@ -288,6 +288,8 @@ export class TicketService {
     nuevoEstado: string,
     options?: {
       comentarios?: string;
+      motivo?: string;
+      pendienteMotivo?: string;
       pendienteTiempoEstimado?: string;
     }
   ): Observable<UpdateTicketStatusResponse> {
@@ -300,6 +302,8 @@ export class TicketService {
     const body = {
       nuevoEstado: nuevoEstado,
       ...(options?.comentarios ? { comentarios: options.comentarios } : {}),
+      ...(options?.motivo ? { motivo: options.motivo } : {}),
+      ...(options?.pendienteMotivo ? { pendienteMotivo: options.pendienteMotivo } : {}),
       ...(options?.pendienteTiempoEstimado ? { pendienteTiempoEstimado: options.pendienteTiempoEstimado } : {})
     };
 

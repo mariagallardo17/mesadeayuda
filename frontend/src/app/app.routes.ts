@@ -29,7 +29,7 @@ export const routes: Routes = [
       {
         path: 'new',
         loadComponent: () => import('./components/tickets/new-ticket/new-ticket.component').then(m => m.NewTicketComponent),
-        data: { roles: ['empleado'] },
+        data: { roles: ['empleado', 'administrador'] },
         canActivate: [RoleGuard]
       },
       {
@@ -41,7 +41,7 @@ export const routes: Routes = [
       {
         path: 'tracking',
         loadComponent: () => import('./components/tickets/ticket-tracking/ticket-tracking.component').then(m => m.TicketTrackingComponent),
-        data: { roles: ['empleado'] },
+        data: { roles: ['empleado', 'administrador'] },
         canActivate: [RoleGuard]
       },
       {
@@ -53,7 +53,7 @@ export const routes: Routes = [
       {
         path: 'assigned',
         loadComponent: () => import('./components/tickets/assigned-tickets/assigned-tickets.component').then(m => m.AssignedTicketsComponent),
-        data: { roles: ['tecnico'] },
+        data: { roles: ['tecnico', 'administrador'] },
         canActivate: [RoleGuard]
       },
       {
@@ -71,13 +71,13 @@ export const routes: Routes = [
       {
         path: 'close',
         loadComponent: () => import('./components/tickets/close-ticket/close-ticket.component').then(m => m.CloseTicketComponent),
-        data: { roles: ['empleado'] },
+        data: { roles: ['empleado', 'administrador'] },
         canActivate: [RoleGuard]
       },
       {
         path: 'summary',
         loadComponent: () => import('./components/tickets/ticket-summary/ticket-summary.component').then(m => m.TicketSummaryComponent),
-        data: { roles: ['empleado'] },
+        data: { roles: ['empleado', 'administrador'] },
         canActivate: [RoleGuard]
       }
     ]

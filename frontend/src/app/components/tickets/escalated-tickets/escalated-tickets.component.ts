@@ -148,7 +148,7 @@ export class EscalatedTicketsComponent implements OnInit, OnDestroy {
       .subscribe({
         next: (response) => {
           let rawTickets: any[] = [];
-          
+
           // Verificar si la respuesta tiene el nuevo formato con paginación
           if (response && response.tickets && response.pagination) {
             rawTickets = Array.isArray(response.tickets) ? response.tickets : [];
@@ -190,10 +190,10 @@ export class EscalatedTicketsComponent implements OnInit, OnDestroy {
 
           // Los tickets ya vienen formateados del backend, solo necesitamos asegurarnos de que tengan la estructura correcta
           console.log('📦 Tickets raw del backend:', rawTickets);
-          
+
           this.tickets = rawTickets.map((ticket: any, index: number) => {
             console.log(`📋 Procesando ticket ${index}:`, ticket);
-            
+
             // El backend ya devuelve los datos formateados, pero hacemos una verificación
             const formattedTicket: EscalatedTicket = {
               id: ticket.id || 0,
@@ -213,7 +213,7 @@ export class EscalatedTicketsComponent implements OnInit, OnDestroy {
               tecnico: ticket.tecnico || null,
               escalamiento: ticket.escalamiento || null
             };
-            
+
             console.log(`✅ Ticket ${index} formateado:`, formattedTicket);
             return formattedTicket;
           });
@@ -355,10 +355,10 @@ export class EscalatedTicketsComponent implements OnInit, OnDestroy {
       tecnico: ticket.tecnico,
       escalamiento: ticket.escalamiento
     });
-    
+
     // Usar directamente los datos que ya tenemos del backend
     // El backend ya devuelve todos los datos necesarios formateados
-    this.selectedTicket = { 
+    this.selectedTicket = {
       ...ticket,
       // Asegurar que todos los campos tengan valores por defecto
       descripcion: ticket.descripcion || '',
@@ -368,7 +368,7 @@ export class EscalatedTicketsComponent implements OnInit, OnDestroy {
       tecnico: ticket.tecnico || null,
       escalamiento: ticket.escalamiento || null
     };
-    
+
     console.log('✅ Ticket seleccionado:', this.selectedTicket);
     this.showDetailsModal = true;
     this.isLoading = false;
@@ -629,7 +629,7 @@ export class EscalatedTicketsComponent implements OnInit, OnDestroy {
 
     this.isLoading = true;
     this.ticketService.updateTicketStatus(this.ticketPendienteSeleccionado.id, 'Pendiente', {
-      comentarios: motivo,
+      motivo: motivo,
       pendienteTiempoEstimado: tiempoEstimado
     }).pipe(
       takeUntil(this.destroy$)

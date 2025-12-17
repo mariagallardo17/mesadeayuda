@@ -42,6 +42,14 @@ export class LoginComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
+    // Verificar si el usuario ya está autenticado
+    const currentUser = this.authService.getCurrentUser();
+    if (currentUser) {
+      // Si ya está autenticado, redirigir al perfil
+      this.router.navigate(['/profile']);
+      return;
+    }
+
     if (isPlatformBrowser(this.platformId)) {
       // Escuchar eventos de limpieza de formularios
       window.addEventListener('clearLoginForm', this.clearForms.bind(this));

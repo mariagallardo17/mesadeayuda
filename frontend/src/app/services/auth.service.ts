@@ -86,7 +86,16 @@ export class AuthService {
 
   hasRole(role: string): boolean {
     const user = this.getCurrentUser();
-    return user ? user.rol === role : false;
+    if (!user || !user.rol) {
+      console.warn('⚠️ hasRole: No hay usuario o rol', { user, role });
+      return false;
+    }
+    // Normalizar comparación: trim y lowercase
+    const userRol = String(user.rol).toLowerCase().trim();
+    const expectedRol = String(role).toLowerCase().trim();
+    const hasAccess = userRol === expectedRol;
+    console.log('🔍 hasRole check:', { userRol, expectedRol, hasAccess, user });
+    return hasAccess;
   }
 
 
@@ -201,5 +210,15 @@ export class AuthService {
 
   isEmpleado(): boolean {
     return this.hasRole('empleado');
+  }
+
+  // Método para actualizar el usuario actual en la sesión
+  updateCurrentUser(updatedUser: User): void {
+    this.currentUserSubject.next(updatedUser);
+    
+    // Actualizar localStorage
+    if (isPlatformBrowser(this.platformId)) {
+      localStorage.setItem('user', JSON.stringify(updatedUser));
+    }
   }
 }

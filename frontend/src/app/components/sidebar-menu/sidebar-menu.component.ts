@@ -38,9 +38,23 @@ export class SidebarMenuComponent implements OnInit, OnDestroy {
     this.authService.currentUser$
       .pipe(takeUntil(this.destroy$))
       .subscribe(user => {
+        console.log('🔍 Sidebar - Usuario actualizado:', user);
         this.currentUser = user;
+        // Si no hay usuario en el observable, intentar obtenerlo directamente
+        if (!this.currentUser) {
+          this.currentUser = this.authService.getCurrentUser();
+          console.log('🔍 Sidebar - Usuario obtenido directamente:', this.currentUser);
+        }
+        console.log('🔍 Sidebar - isAdmin:', this.isAdmin, 'isTecnico:', this.isTecnico, 'isEmpleado:', this.isEmpleado);
         this.cdr.detectChanges(); // Forzar detección de cambios
       });
+    
+    // Verificar usuario al iniciar
+    const initialUser = this.authService.getCurrentUser();
+    if (initialUser) {
+      this.currentUser = initialUser;
+      console.log('🔍 Sidebar - Usuario inicial:', initialUser);
+    }
 
     // Suscribirse al estado del sidebar desde el servicio
     this.sidebarService.isCollapsed$
@@ -92,7 +106,13 @@ export class SidebarMenuComponent implements OnInit, OnDestroy {
   }
 
   get isAdmin(): boolean {
-    return this.authService.isAdmin();
+    const result = this.authService.isAdmin();
+    console.log('🔍 Sidebar isAdmin check:', { 
+      result, 
+      currentUser: this.currentUser, 
+      userRol: this.currentUser?.rol 
+    });
+    return result;
   }
 
   get isTecnico(): boolean {

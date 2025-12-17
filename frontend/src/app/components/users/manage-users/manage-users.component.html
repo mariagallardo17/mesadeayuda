@@ -115,10 +115,23 @@
             <i class="icon">✏️</i>
             Editar
           </button>
-          <button class="action-item" (click)="deleteUser(selectedUser)">
+          <button 
+            class="action-item" 
+            (click)="deleteUser(selectedUser)"
+            *ngIf="!isCurrentAdmin()"
+          >
             <i class="icon">🗑️</i>
             Eliminar
           </button>
+          <div 
+            class="action-item disabled" 
+            *ngIf="isCurrentAdmin()"
+            style="opacity: 0.5; cursor: not-allowed;"
+            title="No puedes eliminar tu propia cuenta"
+          >
+            <i class="icon">🗑️</i>
+            Eliminar (No disponible)
+          </div>
           <button class="action-item" (click)="resetPassword(selectedUser)">
             <i class="icon">🔑</i>
             Resetear contraseña
@@ -310,6 +323,7 @@
               formControlName="rol"
               class="form-select"
               [class.error]="editRol?.invalid && editRol?.touched"
+              [disabled]="isCurrentAdmin()"
             >
               <option value="">Seleccione un rol</option>
               <option *ngFor="let role of getAvailableRolesForEdit()" [value]="role">
@@ -318,6 +332,9 @@
             </select>
             <div class="error-message" *ngIf="editRol?.invalid && editRol?.touched">
               <span *ngIf="editRol?.errors?.['required']">El rol es requerido</span>
+            </div>
+            <div class="info-message" *ngIf="isCurrentAdmin()" style="margin-top: 5px; color: #856404; font-size: 13px;">
+              ⚠️ No puedes cambiar tu propio rol. El administrador siempre debe mantener su rol.
             </div>
           </div>
 

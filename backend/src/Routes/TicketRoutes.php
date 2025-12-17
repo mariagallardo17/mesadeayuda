@@ -762,62 +762,96 @@ class TicketRoutes
             AuthMiddleware::sendResponse($response, 201);
 
             // Intentar enviar correos DESPUÉS de enviar la respuesta (no bloquea)
-            if ($tecnicoId && $idTecnicoParaInsert) {
-                try {
-                    error_log("📧 Preparando envío de correos para ticket #$ticketId");
+            try {
+                error_log("📧 Preparando envío de correos para ticket #$ticketId");
 
-                    $stmtTecnico = $this->db->query(
-                        'SELECT nombre, correo FROM usuarios WHERE id_usuario = ?',
-                        [$idTecnicoParaInsert]
-                    );
-                    $tecnico = $stmtTecnico->fetch();
+                // Obtener datos del empleado (siempre necesario)
+                $stmtEmpleado = $this->db->query(
+                    'SELECT nombre, correo FROM usuarios WHERE id_usuario = ?',
+                    [$user['id_usuario']]
+                );
+                $empleado = $stmtEmpleado->fetch();
 
-                    $stmtEmpleado = $this->db->query(
-                        'SELECT nombre, correo FROM usuarios WHERE id_usuario = ?',
-                        [$user['id_usuario']]
-                    );
-                    $empleado = $stmtEmpleado->fetch();
+                if (!$empleado) {
+                    error_log("⚠️ No se encontró empleado con ID: {$user['id_usuario']}");
+                } elseif (empty($empleado['correo'])) {
+                    error_log("⚠️ El empleado no tiene correo configurado");
+                } else {
+                    // Normalizar correo: trim, lowercase, eliminar espacios
+                    $empleadoCorreo = trim(strtolower($empleado['correo']));
 
-                    // Validar que tenemos los datos necesarios
-                    if (!$tecnico) {
-                        error_log("⚠️ No se encontró técnico con ID: $idTecnicoParaInsert");
-                    } elseif (empty($tecnico['correo'])) {
-                        error_log("⚠️ El técnico {$tecnico['nombre']} no tiene correo configurado");
-                    } elseif (!$empleado) {
-                        error_log("⚠️ No se encontró empleado con ID: {$user['id_usuario']}");
-                    } elseif (empty($empleado['correo'])) {
-                        error_log("⚠️ El empleado {$empleado['nombre']} no tiene correo configurado");
+                    // Log del correo original y normalizado
+                    error_log("📧 Correo empleado - Original: '{$empleado['correo']}', Normalizado: '$empleadoCorreo'");
+
+                    if (!filter_var($empleadoCorreo, FILTER_VALIDATE_EMAIL)) {
+                        error_log("⚠️ Correo del empleado inválido después de normalizar: '$empleadoCorreo' (original: '{$empleado['correo']}')");
                     } else {
-                        // Validar que los correos sean válidos
-                        if (!filter_var($tecnico['correo'], FILTER_VALIDATE_EMAIL)) {
-                            error_log("⚠️ Correo del técnico inválido: {$tecnico['correo']}");
-                        } elseif (!filter_var($empleado['correo'], FILTER_VALIDATE_EMAIL)) {
-                            error_log("⚠️ Correo del empleado inválido: {$empleado['correo']}");
+                        $emailService = new EmailService();
+
+                        // SIEMPRE enviar correo de confirmación al usuario
+                        $emailService->sendTicketCreatedNotification(
+                            [
+                                'id' => $ticketId,
+                                'categoria' => $categoria,
+                                'subcategoria' => $subcategoria,
+                                'descripcion' => $descripcion,
+                                'prioridad' => $prioridad,
+                                'estado' => $estadoFinal
+                            ],
+                            ['nombre' => $empleado['nombre'], 'email' => $empleadoCorreo],
+                            $tecnicoId && $idTecnicoParaInsert, // hasTechnician
+                            $tecnicoNombre ?? null // technicianName
+                        );
+                        error_log("✅ Correo de creación enviado al empleado '$empleadoCorreo' para ticket #$ticketId");
+                    }
+
+                    // Si hay técnico asignado, enviar correos de asignación
+                    if ($tecnicoId && $idTecnicoParaInsert) {
+                        $stmtTecnico = $this->db->query(
+                            'SELECT nombre, correo FROM usuarios WHERE id_usuario = ?',
+                            [$idTecnicoParaInsert]
+                        );
+                        $tecnico = $stmtTecnico->fetch();
+
+                        if (!$tecnico) {
+                            error_log("⚠️ No se encontró técnico con ID: $idTecnicoParaInsert");
+                        } elseif (empty($tecnico['correo'])) {
+                            error_log("⚠️ El técnico {$tecnico['nombre']} no tiene correo configurado");
                         } else {
-                            error_log("📧 Enviando correos - Técnico: {$tecnico['correo']}, Empleado: {$empleado['correo']}");
+                            // Normalizar correo del técnico
+                            $tecnicoCorreo = trim(strtolower($tecnico['correo']));
 
-                            $emailService = new EmailService();
-                            $emailService->sendTicketAssignedNotification(
-                                [
-                                    'id' => $ticketId,
-                                    'categoria' => $categoria,
-                                    'subcategoria' => $subcategoria,
-                                    'descripcion' => $descripcion,
-                                    'prioridad' => $prioridad
-                                ],
-                                ['nombre' => $tecnico['nombre'], 'email' => $tecnico['correo']],
-                                ['nombre' => $empleado['nombre'], 'email' => $empleado['correo']]
-                            );
+                            // Log del correo original y normalizado
+                            error_log("📧 Correo técnico - Original: '{$tecnico['correo']}', Normalizado: '$tecnicoCorreo'");
 
-                            error_log("✅ Correos de asignación enviados para ticket #$ticketId");
+                            if (!filter_var($tecnicoCorreo, FILTER_VALIDATE_EMAIL)) {
+                                error_log("⚠️ Correo del técnico inválido después de normalizar: '$tecnicoCorreo' (original: '{$tecnico['correo']}')");
+                            } else {
+                                // Asegurar que el correo del empleado también esté normalizado
+                                $empleadoCorreoNormalizado = isset($empleadoCorreo) ? $empleadoCorreo : trim(strtolower($empleado['correo']));
+
+                                error_log("📧 Enviando correos de asignación - Técnico: '$tecnicoCorreo', Empleado: '$empleadoCorreoNormalizado'");
+
+                                $emailService->sendTicketAssignedNotification(
+                                    [
+                                        'id' => $ticketId,
+                                        'categoria' => $categoria,
+                                        'subcategoria' => $subcategoria,
+                                        'descripcion' => $descripcion,
+                                        'prioridad' => $prioridad
+                                    ],
+                                    ['nombre' => $tecnico['nombre'], 'email' => $tecnicoCorreo],
+                                    ['nombre' => $empleado['nombre'], 'email' => $empleadoCorreoNormalizado]
+                                );
+
+                                error_log("✅ Correos de asignación enviados para ticket #$ticketId");
+                            }
                         }
                     }
-                } catch (\Exception $e) {
-                    error_log("❌ Error enviando correos para ticket #$ticketId: " . $e->getMessage());
-                    error_log("❌ Stack trace: " . $e->getTraceAsString());
                 }
-            } else {
-                error_log("ℹ️ No se enviarán correos: ticket #$ticketId no tiene técnico asignado (tecnicoId: " . ($tecnicoId ?? 'NULL') . ", idTecnicoParaInsert: " . ($idTecnicoParaInsert ?? 'NULL') . ")");
+            } catch (\Exception $e) {
+                error_log("❌ Error enviando correos para ticket #$ticketId: " . $e->getMessage());
+                error_log("❌ Stack trace: " . $e->getTraceAsString());
             }
         } catch (\PDOException $e) {
             error_log('❌ Error PDO creating ticket: ' . $e->getMessage());

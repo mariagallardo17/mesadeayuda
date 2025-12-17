@@ -48,6 +48,10 @@ if (!$envLoaded) {
     $dotenv->safeLoad();
 }
 
+// Configurar zona horaria de México (importante para fechas en correos y BD)
+date_default_timezone_set('America/Mexico_City');
+error_log("🕐 Zona horaria configurada: " . date_default_timezone_get());
+
 // Set error reporting (desactivar en producción)
 error_reporting(E_ALL);
 ini_set('display_errors', $_ENV['DISPLAY_ERRORS'] ?? '0');

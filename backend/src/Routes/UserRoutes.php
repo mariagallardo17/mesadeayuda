@@ -265,6 +265,24 @@ class UserRoutes
             AuthMiddleware::sendError('No tienes permisos para actualizar este usuario', 403);
         }
 
+        // Prevenir que el administrador cambie su propio rol
+        $userId = $user['id_usuario'] ?? null;
+        if ($userId && (int)$userId === (int)$id) {
+            // Obtener el rol actual del usuario desde la BD
+            $stmt = $this->db->query(
+                'SELECT rol FROM usuarios WHERE id_usuario = ?',
+                [$id]
+            );
+            $currentUser = $stmt->fetch();
+            
+            if ($currentUser && strtolower(trim($currentUser['rol'])) === 'administrador') {
+                // Si intenta cambiar su propio rol siendo administrador, prevenir
+                if (isset($body['rol']) && strtolower(trim($body['rol'])) !== 'administrador') {
+                    AuthMiddleware::sendError('No puedes cambiar tu propio rol. El administrador siempre debe mantener su rol de administrador.', 403);
+                }
+            }
+        }
+
         try {
             $updates = [];
             $params = [];
@@ -280,6 +298,17 @@ class UserRoutes
             }
 
             if (isset($body['rol']) && $user['rol'] === 'administrador') {
+                // Verificar nuevamente que no sea el administrador actual cambiando su propio rol
+                if ($userId && (int)$userId === (int)$id) {
+                    $stmt = $this->db->query(
+                        'SELECT rol FROM usuarios WHERE id_usuario = ?',
+                        [$id]
+                    );
+                    $currentUser = $stmt->fetch();
+                    if ($currentUser && strtolower(trim($currentUser['rol'])) === 'administrador' && strtolower(trim($body['rol'])) !== 'administrador') {
+                        AuthMiddleware::sendError('No puedes cambiar tu propio rol. El administrador siempre debe mantener su rol de administrador.', 403);
+                    }
+                }
                 $updates[] = 'rol = ?';
                 $params[] = $body['rol'];
             }
@@ -356,6 +385,21 @@ class UserRoutes
         // Check admin permissions
         if ($user['rol'] !== 'administrador') {
             AuthMiddleware::sendError('No tienes permisos para eliminar usuarios', 403);
+        }
+
+        // Prevenir que el administrador elimine su propia cuenta
+        $userId = $user['id_usuario'] ?? null;
+        if ($userId && (int)$userId === (int)$id) {
+            // Verificar que sea administrador
+            $stmt = $this->db->query(
+                'SELECT rol FROM usuarios WHERE id_usuario = ?',
+                [$id]
+            );
+            $targetUser = $stmt->fetch();
+            
+            if ($targetUser && strtolower(trim($targetUser['rol'])) === 'administrador') {
+                AuthMiddleware::sendError('No puedes eliminar tu propia cuenta. El administrador no puede ser eliminado.', 403);
+            }
         }
 
         try {

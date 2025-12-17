@@ -1,8 +1,10 @@
 import { Component, OnInit, OnDestroy } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, FormGroup, Validators, ReactiveFormsModule, FormsModule } from '@angular/forms';
+import { Router } from '@angular/router';
 import { Subject, takeUntil, debounceTime, distinctUntilChanged } from 'rxjs';
 import { UserService } from '../../../services/user.service';
+import { AuthService } from '../../../services/auth.service';
 import { SidebarService } from '../../../services/sidebar.service';
 import { User, CreateUserRequest, UpdateUserRequest } from '../../../models/user.model';
 import { passwordValidator } from '../../../validators/password.validator';
@@ -45,7 +47,9 @@ export class ManageUsersComponent implements OnInit, OnDestroy {
 
   constructor(
     private userService: UserService,
+    private authService: AuthService,
     private sidebarService: SidebarService,
+    private router: Router,
     private fb: FormBuilder
   ) {
     // Inicializar formulario vacío
@@ -290,6 +294,10 @@ export class ManageUsersComponent implements OnInit, OnDestroy {
     this.showAddForm = false;
     this.showActionsPanel = false;
 
+    // Verificar si es el usuario actual y es administrador
+    const currentUser = this.authService.getCurrentUser();
+    const isCurrentAdmin = currentUser && currentUser.id === user.id && user.rol === 'administrador';
+
     this.editUserForm.patchValue({
       nombre: user.nombre,
       correo: user.correo,
@@ -298,7 +306,23 @@ export class ManageUsersComponent implements OnInit, OnDestroy {
       activo: user.activo
     });
 
+    // Si es el administrador actual, deshabilitar el campo de rol
+    if (isCurrentAdmin) {
+      this.editUserForm.get('rol')?.disable();
+    } else {
+      this.editUserForm.get('rol')?.enable();
+    }
+
     this.clearMessages();
+  }
+
+  // Verificar si el usuario seleccionado es el administrador actual
+  isCurrentAdmin(): boolean {
+    const currentUser = this.authService.getCurrentUser();
+    return this.selectedUser !== null && 
+           currentUser !== null && 
+           currentUser.id === this.selectedUser.id && 
+           this.selectedUser.rol === 'administrador';
   }
 
   hideForms(): void {
@@ -361,14 +385,48 @@ export class ManageUsersComponent implements OnInit, OnDestroy {
 
   onSubmitEditUser(): void {
     if (this.editUserForm.valid && this.selectedUser) {
+      // Prevenir que el administrador cambie su propio rol
+      const currentUser = this.authService.getCurrentUser();
+      const isCurrentAdmin = currentUser && currentUser.id === this.selectedUser.id && this.selectedUser.rol === 'administrador';
+      
+      if (isCurrentAdmin) {
+        this.errorMessage = 'No puedes cambiar tu propio rol. El administrador siempre debe mantener su rol de administrador.';
+        this.showErrorModal = true;
+        return;
+      }
+
       this.isLoading = true;
       const userData: UpdateUserRequest = this.editUserForm.value;
+      
+      // Si el campo de rol está deshabilitado, usar el valor original
+      if (this.editUserForm.get('rol')?.disabled) {
+        userData.rol = this.selectedUser.rol;
+      }
+      
+      // Verificar si se está editando el usuario actual y si cambió el rol
+      const isCurrentUser = currentUser && currentUser.id === this.selectedUser.id;
+      const roleChanged = isCurrentUser && userData.rol && userData.rol !== currentUser.rol;
 
       this.userService.updateUser(this.selectedUser.id!, userData)
         .pipe(takeUntil(this.destroy$))
         .subscribe({
           next: (updatedUser) => {
             this.successMessage = `Usuario ${updatedUser.nombre} actualizado exitosamente`;
+            
+            // Si se cambió el rol del usuario actual (y no es admin), actualizar su sesión
+            if (isCurrentUser && roleChanged && userData.rol && !isCurrentAdmin) {
+              const updatedCurrentUser = { ...currentUser, rol: userData.rol };
+              this.authService.updateCurrentUser(updatedCurrentUser);
+              
+              // Mostrar mensaje adicional
+              this.successMessage += '. Tu sesión ha sido actualizada con el nuevo rol.';
+              
+              // Redirigir al perfil después de un breve delay
+              setTimeout(() => {
+                this.router.navigate(['/profile']);
+              }, 2000);
+            }
+            
             this.showSuccessModal = true;
             this.hideForms();
             this.loadUsers();
@@ -387,6 +445,16 @@ export class ManageUsersComponent implements OnInit, OnDestroy {
   }
 
   deleteUser(user: User): void {
+    // Prevenir que el administrador elimine su propia cuenta
+    const currentUser = this.authService.getCurrentUser();
+    const isCurrentAdmin = currentUser && currentUser.id === user.id && user.rol === 'administrador';
+    
+    if (isCurrentAdmin) {
+      this.errorMessage = 'No puedes eliminar tu propia cuenta. El administrador no puede ser eliminado.';
+      this.showErrorModal = true;
+      return;
+    }
+
     this.confirmTitle = 'Confirmar eliminación';
     this.confirmMessage = `¿Está seguro de que desea eliminar al usuario ${user.nombre}? Esta acción no se puede deshacer.`;
     this.confirmAction = () => {
