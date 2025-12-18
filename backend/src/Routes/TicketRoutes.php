@@ -1935,6 +1935,7 @@ class TicketRoutes
             // Obtener tickets escalados - SOLO para el técnico destino
             // IMPORTANTE: Usar t.id_tecnico porque cuando se escala, el ticket se asigna al técnico destino
             // También obtenemos información del escalamiento más reciente para mostrar el motivo
+            // Usar INNER JOIN con escalamientos para asegurar que siempre tengamos los datos de escalamiento
             $stmt = $this->db->query(
                 'SELECT t.id_ticket as id, t.descripcion, t.prioridad, t.fecha_creacion,
                         t.estatus, s.categoria, s.subcategoria, s.tiempo_objetivo,
@@ -1942,12 +1943,14 @@ class TicketRoutes
                         u.nombre as usuario_nombre, u.correo as usuario_correo,
                         tec.nombre as tecnico_nombre, tec.correo as tecnico_correo,
                         tec_orig.nombre as tecnico_original_nombre,
-                        e.motivo_escalamiento, e.fecha_escalamiento, e.nivel_escalamiento
+                        e.motivo_escalamiento, e.fecha_escalamiento, e.nivel_escalamiento,
+                        e.tecnico_original_id, e.tecnico_nuevo_id
                  FROM tickets t
                  JOIN servicios s ON t.id_servicio = s.id_servicio
                  JOIN usuarios u ON t.id_usuario = u.id_usuario
                  LEFT JOIN usuarios tec ON t.id_tecnico = tec.id_usuario
-                 LEFT JOIN escalamientos e ON t.id_ticket = e.id_ticket 
+                 INNER JOIN escalamientos e ON t.id_ticket = e.id_ticket 
+                    AND e.tecnico_nuevo_id = ?
                     AND e.fecha_escalamiento = (
                         SELECT MAX(fecha_escalamiento)
                         FROM escalamientos
@@ -1956,9 +1959,9 @@ class TicketRoutes
                  LEFT JOIN usuarios tec_orig ON e.tecnico_original_id = tec_orig.id_usuario
                  WHERE t.estatus = "Escalado"
                  AND t.id_tecnico = ?
-                 ORDER BY t.fecha_asignacion DESC, t.fecha_creacion DESC
+                 ORDER BY e.fecha_escalamiento DESC, t.fecha_creacion DESC
                  LIMIT ? OFFSET ?',
-                [$user['id_usuario'], $limit, $offset]
+                [$user['id_usuario'], $user['id_usuario'], $limit, $offset]
             );
 
             $tickets = $stmt->fetchAll();
@@ -2370,7 +2373,43 @@ class TicketRoutes
             $escalamientoCompletado = true;
 
             // ============================================
-            // ENVIAR RESPUESTA EXITOSA INMEDIATAMENTE - ANTES de hacer cualquier otra cosa
+            // GUARDAR INFORMACIÓN DE ESCALAMIENTO ANTES de enviar respuesta
+            // Esto es CRÍTICO para que los datos aparezcan correctamente
+            // ============================================
+            $tecnicoOriginalId = $ticket['id_tecnico'] ?? $user['id_usuario'];
+            
+            error_log("📧 [ESCALAMIENTO] Guardando información de escalamiento en BD");
+            error_log("📧 [ESCALAMIENTO] Técnico original: $tecnicoOriginalId, Técnico nuevo: $tecnicoDestino, Usuario que escala: {$user['id_usuario']}");
+            
+            $escalamientoGuardado = false;
+            try {
+                $this->db->query(
+                    'INSERT INTO escalamientos (id_ticket, tecnico_original_id, tecnico_nuevo_id, nivel_escalamiento, persona_enviar, motivo_escalamiento, fecha_escalamiento) VALUES (?, ?, ?, ?, ?, ?, NOW())',
+                    [$id, $tecnicoOriginalId, $tecnicoDestino, 'Manual', $tecnicoDestino, $motivoEscalamiento]
+                );
+                $escalamientoGuardado = true;
+                error_log("✅ [ESCALAMIENTO] Información de escalamiento guardada exitosamente");
+            } catch (\Exception $e) {
+                error_log("❌ [ESCALAMIENTO] Error guardando información de escalamiento: " . $e->getMessage());
+                error_log("❌ [ESCALAMIENTO] Stack trace: " . $e->getTraceAsString());
+                // Intentar verificar si ya existe un registro
+                try {
+                    $stmtCheck = $this->db->query(
+                        'SELECT id FROM escalamientos WHERE id_ticket = ? AND tecnico_nuevo_id = ? ORDER BY fecha_escalamiento DESC LIMIT 1',
+                        [$id, $tecnicoDestino]
+                    );
+                    $existe = $stmtCheck->fetch();
+                    if ($existe) {
+                        error_log("⚠️ [ESCALAMIENTO] Ya existe un registro de escalamiento para este ticket");
+                        $escalamientoGuardado = true;
+                    }
+                } catch (\Exception $e2) {
+                    error_log("❌ [ESCALAMIENTO] Error verificando escalamiento existente: " . $e2->getMessage());
+                }
+            }
+
+            // ============================================
+            // ENVIAR RESPUESTA EXITOSA DESPUÉS de guardar el escalamiento
             // ============================================
             $nombreTecnicoDestino = isset($tecnicoDestinoInfo['nombre']) ? $tecnicoDestinoInfo['nombre'] : 'Técnico destino';
 
@@ -2384,7 +2423,7 @@ class TicketRoutes
                 'success' => true
             ];
 
-            error_log("✅ [ESCALAMIENTO] Enviando respuesta exitosa INMEDIATAMENTE para ticket #$id");
+            error_log("✅ [ESCALAMIENTO] Enviando respuesta exitosa para ticket #$id");
             AuthMiddleware::sendResponse($response);
 
             // ============================================
@@ -2392,25 +2431,6 @@ class TicketRoutes
             // Si fallan, no importa porque ya enviamos respuesta exitosa
             // ============================================
             try {
-                // Save escalation info
-                // IMPORTANTE: tecnico_original_id debe ser el técnico que tenía el ticket ANTES del escalamiento
-                // Si el ticket ya estaba asignado a alguien, ese es el técnico original
-                // Si no estaba asignado, el técnico original es el usuario que está escalando
-                $tecnicoOriginalId = $ticket['id_tecnico'] ?? $user['id_usuario'];
-
-                error_log("📧 [ESCALAMIENTO] Guardando información de escalamiento en BD");
-                error_log("📧 [ESCALAMIENTO] Técnico original: $tecnicoOriginalId, Técnico nuevo: $tecnicoDestino, Usuario que escala: {$user['id_usuario']}");
-
-                try {
-                    $this->db->query(
-                        'INSERT INTO escalamientos (id_ticket, tecnico_original_id, tecnico_nuevo_id, nivel_escalamiento, persona_enviar, motivo_escalamiento, fecha_escalamiento) VALUES (?, ?, ?, ?, ?, ?, NOW())',
-                        [$id, $tecnicoOriginalId, $tecnicoDestino, 'Manual', $tecnicoDestino, $motivoEscalamiento]
-                    );
-                    error_log("✅ [ESCALAMIENTO] Información de escalamiento guardada exitosamente");
-                } catch (\Exception $e) {
-                    error_log("❌ [ESCALAMIENTO] Error guardando información de escalamiento: " . $e->getMessage());
-                    // No lanzar excepción - el ticket ya fue actualizado, solo falla el registro del escalamiento
-                }
 
                 // Obtener información completa del ticket y empleado (para correos y notificaciones)
                 $ticketInfo = null;
@@ -2662,6 +2682,30 @@ class TicketRoutes
             if ($idTicket === null || $idTicket <= 0) {
                 error_log("⚠️ [NOTIFICACIONES] No se puede crear notificación: idTicket inválido ($idTicket) para usuario $idUsuario");
                 return false;
+            }
+
+            // VALIDACIÓN CRÍTICA: Si el mensaje empieza con "Tu ticket", solo enviar a usuarios (empleados)
+            // NO enviar a técnicos o administradores
+            if (stripos($mensaje, 'Tu ticket') === 0) {
+                try {
+                    $stmtRol = $this->db->query(
+                        'SELECT rol FROM usuarios WHERE id_usuario = ?',
+                        [$idUsuario]
+                    );
+                    $usuarioData = $stmtRol->fetch();
+                    
+                    if ($usuarioData && isset($usuarioData['rol'])) {
+                        $rol = strtolower(trim($usuarioData['rol']));
+                        if ($rol !== 'empleado') {
+                            error_log("🚫 [NOTIFICACIONES] BLOQUEADA: Notificación 'Tu ticket' para usuario ID $idUsuario con rol '$rol'. Solo se envían a empleados.");
+                            return false;
+                        }
+                    }
+                } catch (\Exception $e) {
+                    error_log("⚠️ [NOTIFICACIONES] Error verificando rol del usuario $idUsuario: " . $e->getMessage());
+                    // Si no se puede verificar el rol, no crear la notificación para evitar enviar a técnicos
+                    return false;
+                }
             }
 
             error_log("📝 [NOTIFICACIONES] Intentando crear notificación - Usuario: $idUsuario, Ticket: $idTicket");
