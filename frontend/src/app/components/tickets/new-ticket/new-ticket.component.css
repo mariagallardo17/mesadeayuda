@@ -668,6 +668,9 @@
   width: 90%;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
   position: relative;
+  overflow: hidden;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .success-modal h2 {
@@ -675,6 +678,9 @@
   margin-bottom: 1.5rem;
   font-size: 1.5rem;
   font-weight: bold;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
 }
 
 .ticket-info-box {
@@ -684,6 +690,9 @@
   padding: 1.5rem;
   margin-bottom: 1.5rem;
   text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  word-wrap: break-word;
 }
 
 .ticket-id {
@@ -691,28 +700,53 @@
   font-weight: bold;
   color: #4A90E2;
   margin-bottom: 0.5rem;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .ticket-description {
   margin-bottom: 0.5rem;
   color: #333;
   font-weight: bold;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  line-height: 1.4;
 }
 
 .ticket-time {
   margin-bottom: 0.5rem;
   color: #666;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
 }
 
 .ticket-technician {
   margin-bottom: 0.5rem;
   color: #4A90E2;
   font-weight: bold;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
+}
+
+.ticket-technician span {
+  display: inline-block;
+  max-width: 100%;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
 }
 
 .ticket-email {
   color: #666;
   font-style: italic;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+  max-width: 100%;
 }
 
 .ok-button {

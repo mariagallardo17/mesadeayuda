@@ -50,17 +50,32 @@ class AuthRoutes
         
         try {
             // Find user in database (first check if user exists, then check status)
-            $stmt = $this->db->query(
-                'SELECT id_usuario, correo, password, rol, nombre, password_temporal, num_empleado, departamento, estatus 
-                 FROM usuarios WHERE correo = ?',
-                [$correo]
-            );
+            // Intentar con diferentes nombres de tabla
+            $user = null;
+            $nombresTabla = ['usuarios', 'Usuarios', 'USUARIOS'];
             
-            $user = $stmt->fetch();
+            foreach ($nombresTabla as $nombreTabla) {
+                try {
+                    $stmt = $this->db->query(
+                        "SELECT id_usuario, correo, password, rol, nombre, password_temporal, num_empleado, departamento, estatus 
+                         FROM `$nombreTabla` WHERE correo = ?",
+                        [$correo]
+                    );
+                    
+                    $user = $stmt->fetch();
+                    if ($user) {
+                        error_log("✅ Usuario encontrado en tabla: $nombreTabla");
+                        break;
+                    }
+                } catch (\Exception $e) {
+                    error_log("⚠️ Error buscando en tabla $nombreTabla: " . $e->getMessage());
+                    continue;
+                }
+            }
             
             if (!$user) {
                 $elapsed = (microtime(true) - $startTime) * 1000;
-                error_log("Login fallido - Usuario no encontrado: $correo ({$elapsed}ms)");
+                error_log("❌ Login fallido - Usuario no encontrado: $correo ({$elapsed}ms)");
                 AuthMiddleware::sendError('Credenciales inválidas', 401);
             }
             

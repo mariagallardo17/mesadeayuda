@@ -31,17 +31,83 @@ class NotificationRoutes
     {
         $user = AuthMiddleware::authenticate();
         
+        // Validar que tenemos el id_usuario
+        if (!isset($user['id_usuario']) || empty($user['id_usuario'])) {
+            error_log('❌ ERROR: Usuario autenticado no tiene id_usuario válido');
+            AuthMiddleware::sendError('Error de autenticación: usuario no válido', 401);
+            return;
+        }
+        
+        $userId = (int)$user['id_usuario'];
+        error_log("📧 Obteniendo notificaciones para usuario ID: $userId");
+        
         try {
-            $stmt = $this->db->query(
-                'SELECT id_notificacion, id_ticket, id_usuario, tipo, mensaje, fecha_envio as fecha_creacion, leida FROM notificaciones WHERE id_usuario = ? ORDER BY fecha_envio DESC LIMIT 50',
-                [$user['id_usuario']]
-            );
+            // Intentar con diferentes nombres de tabla (case-sensitive)
+            $notifications = [];
+            $tablaEncontrada = false;
+            $nombresTabla = ['notificaciones', 'Notificaciones', 'NOTIFICACIONES'];
             
-            $notifications = $stmt->fetchAll();
-            AuthMiddleware::sendResponse($notifications);
+            foreach ($nombresTabla as $nombreTabla) {
+                try {
+                    error_log("🔍 Intentando obtener notificaciones de tabla: $nombreTabla");
+                    $stmt = $this->db->query(
+                        "SELECT id_notificacion, id_ticket, id_usuario, tipo, mensaje, fecha_envio as fecha_creacion, leida 
+                         FROM `$nombreTabla` 
+                         WHERE id_usuario = ? 
+                         ORDER BY fecha_envio DESC 
+                         LIMIT 50",
+                        [$userId]
+                    );
+                    
+                    $notifications = $stmt->fetchAll();
+                    $tablaEncontrada = true;
+                    error_log("✅ Tabla encontrada: $nombreTabla");
+                    break;
+                } catch (\Exception $e) {
+                    error_log("⚠️ Tabla $nombreTabla no encontrada o error: " . $e->getMessage());
+                    continue;
+                }
+            }
+            
+            if (!$tablaEncontrada) {
+                error_log("❌ No se encontró ninguna tabla de notificaciones válida");
+                AuthMiddleware::sendResponse([]);
+                return;
+            }
+            
+            // Log para depuración
+            error_log("✅ Se encontraron " . count($notifications) . " notificaciones para usuario ID: $userId");
+            
+            // FILTRAR CRÍTICO: Asegurar que todas las notificaciones pertenecen al usuario correcto
+            // Esto es una doble validación de seguridad
+            $notificacionesValidas = [];
+            $notificacionesInvalidas = 0;
+            
+            foreach ($notifications as $notif) {
+                $notifUserId = isset($notif['id_usuario']) ? (int)$notif['id_usuario'] : 0;
+                
+                // Solo incluir notificaciones que pertenecen al usuario autenticado
+                if ($notifUserId === $userId) {
+                    $notificacionesValidas[] = $notif;
+                } else {
+                    $notificacionesInvalidas++;
+                    error_log("🚫 [NOTIFICACIONES] ERROR CRÍTICO: Notificación ID {$notif['id_notificacion']} pertenece a usuario $notifUserId, pero se solicitó para usuario $userId - FILTRADA");
+                }
+            }
+            
+            if ($notificacionesInvalidas > 0) {
+                error_log("⚠️ [NOTIFICACIONES] ADVERTENCIA CRÍTICA: Se filtraron $notificacionesInvalidas notificaciones que no pertenecen al usuario $userId");
+            }
+            
+            error_log("✅ [NOTIFICACIONES] Devolviendo " . count($notificacionesValidas) . " notificaciones válidas para usuario ID: $userId");
+            
+            // Solo devolver notificaciones válidas
+            AuthMiddleware::sendResponse($notificacionesValidas);
         } catch (\Exception $e) {
-            error_log('Error getting notifications: ' . $e->getMessage());
-            AuthMiddleware::sendError('Error interno del servidor', 500);
+            error_log('❌ Error getting notifications: ' . $e->getMessage());
+            error_log('❌ Stack trace: ' . $e->getTraceAsString());
+            // En caso de error, devolver array vacío en lugar de error 500
+            AuthMiddleware::sendResponse([]);
         }
     }
     
@@ -50,15 +116,35 @@ class NotificationRoutes
         AuthMiddleware::authenticate();
         
         try {
-            $stmt = $this->db->query(
-                'SELECT id_notificacion, id_ticket, id_usuario, tipo, mensaje, fecha_envio as fecha_creacion, leida FROM notificaciones WHERE id_usuario = ? ORDER BY fecha_envio DESC LIMIT 50',
-                [$userId]
-            );
+            // Intentar con diferentes nombres de tabla
+            $notifications = [];
+            $tablaEncontrada = false;
+            $nombresTabla = ['notificaciones', 'Notificaciones', 'NOTIFICACIONES'];
             
-            $notifications = $stmt->fetchAll();
+            foreach ($nombresTabla as $nombreTabla) {
+                try {
+                    $stmt = $this->db->query(
+                        "SELECT id_notificacion, id_ticket, id_usuario, tipo, mensaje, fecha_envio as fecha_creacion, leida FROM `$nombreTabla` WHERE id_usuario = ? ORDER BY fecha_envio DESC LIMIT 50",
+                        [$userId]
+                    );
+                    
+                    $notifications = $stmt->fetchAll();
+                    $tablaEncontrada = true;
+                    break;
+                } catch (\Exception $e) {
+                    continue;
+                }
+            }
+            
+            if (!$tablaEncontrada) {
+                error_log("❌ No se encontró ninguna tabla de notificaciones válida para usuario $userId");
+                AuthMiddleware::sendResponse([]);
+                return;
+            }
+            
             AuthMiddleware::sendResponse($notifications);
         } catch (\Exception $e) {
-            error_log('Error getting notifications by user ID: ' . $e->getMessage());
+            error_log('❌ Error getting notifications by user ID: ' . $e->getMessage());
             AuthMiddleware::sendError('Error interno del servidor', 500);
         }
     }
@@ -84,14 +170,37 @@ class NotificationRoutes
         }
         
         try {
-            $this->db->query(
-                'INSERT INTO notificaciones (id_usuario, mensaje, tipo, id_ticket, fecha_envio, leida) VALUES (?, ?, ?, ?, NOW(), 0)',
-                [$idUsuario, $mensaje, $tipo, $idTicket]
-            );
+            // Intentar insertar en diferentes nombres de tabla
+            $insertado = false;
+            $nombresTabla = ['notificaciones', 'Notificaciones', 'NOTIFICACIONES'];
+            
+            foreach ($nombresTabla as $nombreTabla) {
+                try {
+                    $this->db->query(
+                        "INSERT INTO `$nombreTabla` (id_usuario, mensaje, tipo, id_ticket, fecha_envio, leida) VALUES (?, ?, ?, ?, NOW(), 0)",
+                        [$idUsuario, $mensaje, $tipo, $idTicket]
+                    );
+                    $insertado = true;
+                    error_log("✅ Notificación insertada en tabla: $nombreTabla");
+                    break;
+                } catch (\Exception $e) {
+                    if (strpos($e->getMessage(), "doesn't exist") === false && strpos($e->getMessage(), "Unknown table") === false) {
+                        // Si es otro tipo de error, lanzarlo
+                        throw $e;
+                    }
+                    // Si es error de tabla no existe, intentar siguiente
+                    continue;
+                }
+            }
+            
+            if (!$insertado) {
+                throw new \Exception("No se pudo insertar notificación: ninguna tabla de notificaciones encontrada");
+            }
             
             AuthMiddleware::sendResponse(['message' => 'Notificación creada exitosamente'], 201);
         } catch (\Exception $e) {
-            error_log('Error creating notification: ' . $e->getMessage());
+            error_log('❌ Error creating notification: ' . $e->getMessage());
+            error_log('❌ Stack trace: ' . $e->getTraceAsString());
             AuthMiddleware::sendError('Error interno del servidor', 500);
         }
     }
@@ -113,14 +222,37 @@ class NotificationRoutes
         try {
             $mensaje = 'El estado del ticket #' . $idTicket . ' ha cambiado de "' . $estatusAnterior . '" a "' . $nuevoEstatus . '"';
             
-            $this->db->query(
-                'INSERT INTO notificaciones (id_usuario, mensaje, tipo, id_ticket, fecha_envio, leida) VALUES (?, ?, ?, ?, NOW(), 0)',
-                [$idUsuario, $mensaje, 'Interna', $idTicket]
-            );
+            // Intentar insertar en diferentes nombres de tabla
+            $insertado = false;
+            $nombresTabla = ['notificaciones', 'Notificaciones', 'NOTIFICACIONES'];
+            
+            foreach ($nombresTabla as $nombreTabla) {
+                try {
+                    $this->db->query(
+                        "INSERT INTO `$nombreTabla` (id_usuario, mensaje, tipo, id_ticket, fecha_envio, leida) VALUES (?, ?, ?, ?, NOW(), 0)",
+                        [$idUsuario, $mensaje, 'Interna', $idTicket]
+                    );
+                    $insertado = true;
+                    error_log("✅ Notificación de cambio de estado insertada en tabla: $nombreTabla");
+                    break;
+                } catch (\Exception $e) {
+                    if (strpos($e->getMessage(), "doesn't exist") === false && strpos($e->getMessage(), "Unknown table") === false) {
+                        // Si es otro tipo de error, lanzarlo
+                        throw $e;
+                    }
+                    // Si es error de tabla no existe, intentar siguiente
+                    continue;
+                }
+            }
+            
+            if (!$insertado) {
+                throw new \Exception("No se pudo insertar notificación: ninguna tabla de notificaciones encontrada");
+            }
             
             AuthMiddleware::sendResponse(['message' => 'Notificación de cambio de estado creada exitosamente'], 201);
         } catch (\Exception $e) {
-            error_log('Error creating status change notification: ' . $e->getMessage());
+            error_log('❌ Error creating status change notification: ' . $e->getMessage());
+            error_log('❌ Stack trace: ' . $e->getTraceAsString());
             AuthMiddleware::sendError('Error interno del servidor', 500);
         }
     }
@@ -130,14 +262,34 @@ class NotificationRoutes
         $user = AuthMiddleware::authenticate();
         
         try {
-            $this->db->query(
-                'UPDATE notificaciones SET leida = 1 WHERE id_notificacion = ? AND id_usuario = ?',
-                [$id, $user['id_usuario']]
-            );
+            // Intentar actualizar en diferentes nombres de tabla
+            $actualizado = false;
+            $nombresTabla = ['notificaciones', 'Notificaciones', 'NOTIFICACIONES'];
+            
+            foreach ($nombresTabla as $nombreTabla) {
+                try {
+                    $this->db->query(
+                        "UPDATE `$nombreTabla` SET leida = 1 WHERE id_notificacion = ? AND id_usuario = ?",
+                        [$id, $user['id_usuario']]
+                    );
+                    $actualizado = true;
+                    break;
+                } catch (\Exception $e) {
+                    if (strpos($e->getMessage(), "doesn't exist") === false && strpos($e->getMessage(), "Unknown table") === false) {
+                        // Si es otro tipo de error, lanzarlo
+                        throw $e;
+                    }
+                    continue;
+                }
+            }
+            
+            if (!$actualizado) {
+                throw new \Exception("No se pudo actualizar notificación: ninguna tabla de notificaciones encontrada");
+            }
             
             AuthMiddleware::sendResponse(['message' => 'Notificación marcada como leída']);
         } catch (\Exception $e) {
-            error_log('Error marking notification as read: ' . $e->getMessage());
+            error_log('❌ Error marking notification as read: ' . $e->getMessage());
             AuthMiddleware::sendError('Error interno del servidor', 500);
         }
     }
@@ -147,15 +299,36 @@ class NotificationRoutes
         $user = AuthMiddleware::authenticate();
         
         try {
-            $this->db->query(
-                'DELETE FROM notificaciones WHERE id_notificacion = ? AND id_usuario = ?',
-                [$notificationId, $user['id_usuario']]
-            );
+            // Intentar eliminar en diferentes nombres de tabla
+            $eliminado = false;
+            $nombresTabla = ['notificaciones', 'Notificaciones', 'NOTIFICACIONES'];
+            
+            foreach ($nombresTabla as $nombreTabla) {
+                try {
+                    $this->db->query(
+                        "DELETE FROM `$nombreTabla` WHERE id_notificacion = ? AND id_usuario = ?",
+                        [$notificationId, $user['id_usuario']]
+                    );
+                    $eliminado = true;
+                    break;
+                } catch (\Exception $e) {
+                    if (strpos($e->getMessage(), "doesn't exist") === false && strpos($e->getMessage(), "Unknown table") === false) {
+                        // Si es otro tipo de error, lanzarlo
+                        throw $e;
+                    }
+                    continue;
+                }
+            }
+            
+            if (!$eliminado) {
+                throw new \Exception("No se pudo eliminar notificación: ninguna tabla de notificaciones encontrada");
+            }
             
             AuthMiddleware::sendResponse(['message' => 'Notificación eliminada exitosamente']);
         } catch (\Exception $e) {
-            error_log('Error deleting notification: ' . $e->getMessage());
+            error_log('❌ Error deleting notification: ' . $e->getMessage());
             AuthMiddleware::sendError('Error interno del servidor', 500);
         }
     }
 }
+

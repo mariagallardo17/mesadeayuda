@@ -115,25 +115,10 @@ export class TicketService {
 
     return this.http.post<CreateTicketResponse>(this.apiUrl, formData, { headers }).pipe(
       tap(response => {
-        // Agregar notificación cuando se crea un ticket exitosamente
-        this.notificationService.addNotification({
-          type: 'success',
-          title: 'Ticket Creado',
-          message: `Tu ticket #${response.ticket.id} ha sido creado exitosamente`,
-          ticketId: response.ticket.id.toString(),
-          actionUrl: `/tickets/tracking?ticketId=${response.ticket.id}`
-        });
-
-        // Si hay asignación automática, agregar notificación adicional
-        if (response.asignacionAutomatica?.exitosa) {
-          this.notificationService.addNotification({
-            type: 'info',
-            title: 'Ticket Asignado',
-            message: `Tu ticket #${response.ticket.id} ha sido asignado a ${response.asignacionAutomatica.tecnico}`,
-            ticketId: response.ticket.id.toString(),
-            actionUrl: `/tickets/tracking?ticketId=${response.ticket.id}`
-          });
-        }
+        // Las notificaciones ahora se crean en el backend
+        // El servicio de notificaciones las obtendrá automáticamente mediante polling
+        // NO crear notificaciones localmente aquí para evitar duplicados y problemas de sincronización
+        console.log('✅ Ticket creado, las notificaciones serán obtenidas del backend automáticamente');
       })
     );
   }

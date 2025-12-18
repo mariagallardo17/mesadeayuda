@@ -80,10 +80,10 @@ class ReportesController
                     $paramsFecha
                 );
             } else {
-                $stmt = $this->db->query(
-                    "SELECT COUNT(*) as count FROM tickets 
-                     WHERE estatus IN ('Abierto', 'En Progreso', 'Pendiente')"
-                );
+            $stmt = $this->db->query(
+                "SELECT COUNT(*) as count FROM tickets 
+                 WHERE estatus IN ('Abierto', 'En Progreso', 'Pendiente')"
+            );
             }
             $ticketsPendientes = (int)$stmt->fetch()['count'];
 
@@ -194,8 +194,8 @@ class ReportesController
                 $mttrMinutos = 0;
             } else {
                 $promedioMinutos = (float)$promedioMinutos;
-                $mttrHoras = floor($promedioMinutos / 60);
-                $mttrMinutos = round($promedioMinutos % 60);
+            $mttrHoras = floor($promedioMinutos / 60);
+            $mttrMinutos = round($promedioMinutos % 60);
             }
 
             // 13. MTTA (Mean Time To Acknowledge)

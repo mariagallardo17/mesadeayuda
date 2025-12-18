@@ -420,12 +420,12 @@ export class ReportsComponent implements OnInit, OnDestroy, AfterViewInit {
 
     // Función asíncrona para exportar
     (async () => {
-      try {
-        const doc = new jsPDF('p', 'mm', 'a4');
-        let yPosition = 20;
-        const pageWidth = doc.internal.pageSize.getWidth();
-        const pageHeight = doc.internal.pageSize.getHeight();
-        const margin = 20;
+    try {
+      const doc = new jsPDF('p', 'mm', 'a4');
+      let yPosition = 20;
+      const pageWidth = doc.internal.pageSize.getWidth();
+      const pageHeight = doc.internal.pageSize.getHeight();
+      const margin = 20;
 
       // Encabezado
       doc.setFontSize(20);
@@ -778,16 +778,16 @@ export class ReportsComponent implements OnInit, OnDestroy, AfterViewInit {
           }
 
           // Título del técnico
-          doc.setFontSize(12);
-          doc.setFont('helvetica', 'bold');
+        doc.setFontSize(12);
+        doc.setFont('helvetica', 'bold');
           doc.text(`5.${index + 1} ${tecnico.nombre}`, margin, yPosition);
-          yPosition += 8;
+        yPosition += 8;
 
           // Tabla de métricas del técnico
-          doc.setFontSize(10);
-          doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        doc.setFont('helvetica', 'normal');
           
-          const metricasTecnico = [
+        const metricasTecnico = [
             ['Tickets asignados', tecnico.ticketsAsignados || 0],
             ['Tickets resueltos', tecnico.ticketsResueltos || 0],
             ['Tickets pendientes', tecnico.ticketsPendientes || 0],
@@ -795,23 +795,23 @@ export class ReportsComponent implements OnInit, OnDestroy, AfterViewInit {
             ['Tickets reabiertos', tecnico.ticketsReabiertos || 0],
             ['Tickets fuera de tiempo', tecnico.ticketsFueraTiempo || 0],
             ['Calificación promedio', `${tecnico.calificacionPromedio ? tecnico.calificacionPromedio.toFixed(1) : '0.0'}`]
-          ];
+        ];
 
-          metricasTecnico.forEach(([label, value]) => {
-            if (yPosition > pageHeight - 30) {
-              doc.addPage();
-              yPosition = 20;
-            }
-            doc.text(`${label}:`, margin, yPosition);
-            doc.setFont('helvetica', 'bold');
-            doc.text(String(value), pageWidth - margin - 30, yPosition, { align: 'right' });
-            doc.setFont('helvetica', 'normal');
-            yPosition += 7;
-          });
+        metricasTecnico.forEach(([label, value]) => {
+          if (yPosition > pageHeight - 30) {
+            doc.addPage();
+            yPosition = 20;
+          }
+          doc.text(`${label}:`, margin, yPosition);
+          doc.setFont('helvetica', 'bold');
+          doc.text(String(value), pageWidth - margin - 30, yPosition, { align: 'right' });
+          doc.setFont('helvetica', 'normal');
+          yPosition += 7;
+        });
 
           // Análisis del desempeño
-          yPosition += 5;
-          doc.setFont('helvetica', 'italic');
+        yPosition += 5;
+        doc.setFont('helvetica', 'italic');
           doc.setFontSize(9);
           
           // Generar análisis dinámico basado en métricas
@@ -887,13 +887,13 @@ export class ReportsComponent implements OnInit, OnDestroy, AfterViewInit {
         if (semanasImage) {
           console.log('✅ Gráfica de semanas capturada exitosamente');
           if (yPosition + chartHeight > pageHeight - 20) {
-            doc.addPage();
-            yPosition = 20;
-          }
+          doc.addPage();
+          yPosition = 20;
+        }
           doc.setFontSize(11);
           doc.setFont('helvetica', 'bold');
           doc.text('6.1 Tickets por Semana', margin, yPosition);
-          yPosition += 6;
+        yPosition += 6;
           try {
             doc.addImage(semanasImage, 'PNG', margin, yPosition, chartWidth, chartHeight, undefined, 'FAST');
             yPosition += chartHeight + 10;
@@ -1106,17 +1106,17 @@ export class ReportsComponent implements OnInit, OnDestroy, AfterViewInit {
         yPosition += 6;
       });
 
-        // Guardar PDF
-        const fileName = `reporte-mensual-${new Date().toISOString().split('T')[0]}.pdf`;
-        doc.save(fileName);
+      // Guardar PDF
+      const fileName = `reporte-mensual-${new Date().toISOString().split('T')[0]}.pdf`;
+      doc.save(fileName);
 
-        this.isLoading = false;
+    this.isLoading = false;
         alert('Reporte exportado a PDF exitosamente con todas las gráficas');
-      } catch (error) {
-        console.error('Error exportando a PDF:', error);
-        this.isLoading = false;
-        alert('Error al exportar el reporte a PDF: ' + (error instanceof Error ? error.message : 'Error desconocido'));
-      }
+    } catch (error) {
+      console.error('Error exportando a PDF:', error);
+      this.isLoading = false;
+      alert('Error al exportar el reporte a PDF: ' + (error instanceof Error ? error.message : 'Error desconocido'));
+    }
     })();
   }
 

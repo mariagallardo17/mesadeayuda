@@ -600,7 +600,8 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
     }).pipe(
       takeUntil(this.destroy$)
     ).subscribe({
-      next: () => {
+      next: (response) => {
+        console.log('✅ [ESCALAMIENTO] Respuesta exitosa del servidor:', response);
         this.isLoading = false;
         this.cerrarEscalamiento();
         this.loadTickets(); // Recargar tickets
@@ -608,14 +609,22 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
         if (this.selectedTicket) {
           this.selectedTicket.estado = 'Escalado';
         }
-        // Mostrar modal de éxito en lugar de alert
-        this.successMessage = 'Ticket escalado exitosamente';
+        // Mostrar modal de éxito con el mensaje del servidor
+        const mensaje = response?.message || 'Ticket escalado exitosamente';
+        this.successMessage = mensaje;
         this.showSuccessModal = true;
       },
       error: (error) => {
-        console.error('Error escalando ticket:', error);
+        console.error('❌ [ESCALAMIENTO] Error escalando ticket:', error);
+        console.error('❌ [ESCALAMIENTO] Detalles:', {
+          status: error?.status,
+          statusText: error?.statusText,
+          message: error?.message,
+          error: error?.error
+        });
         this.isLoading = false;
-        alert(error.error?.error || 'Error al escalar el ticket');
+        const errorMsg = error?.error?.error || error?.error?.message || error?.message || 'Error al escalar el ticket';
+        alert(errorMsg);
       }
     });
   }

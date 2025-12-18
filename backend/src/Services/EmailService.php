@@ -3,7 +3,7 @@
 namespace App\Services;
 
 class EmailService
-{
+
 
     public function __construct()
     {
@@ -402,60 +402,27 @@ HTML;
 HTML;
     }
 
-    private function generateTicketCreatedEmail($ticket, $employee, $hasTechnician = false, $technicianName = null)
-    {
-        $baseUrl = $this->getFrontendUrl();
-        $ticketUrl = "$baseUrl/tickets/tracking";
-
-        $tecnicoInfo = $hasTechnician && $technicianName
-            ? "<p><strong>Técnico asignado:</strong> {$technicianName}</p>"
-            : "<p><strong>Técnico asignado:</strong> En proceso de asignación</p>";
-
-        return <<<HTML
-<!DOCTYPE html>
-<html lang="es">
-<head>
-    <meta charset="UTF-8">
-    <title>Ticket Creado</title>
-</head>
-<body style="font-family: Arial, sans-serif; background: #f8f9fa; margin:0; padding:0;">
-    <div style="max-width: 600px; margin: 30px auto; background: #fff; border-radius: 15px; box-shadow: 0 2px 8px #e0e0e0; padding: 30px;">
-        <h2 style="text-align: center; color: #4CAF50; margin-bottom: 10px;">✅ Ticket Creado Exitosamente</h2>
-        <hr style="border:none; border-top:2px solid #4CAF50; margin-bottom: 30px;">
-        <p>Hola <strong>{$employee['nombre']}</strong>:</p>
-        <p>Tu ticket ha sido creado exitosamente y está siendo procesado.</p>
-        <div style="background: #e8f5e9; border-left: 6px solid #4CAF50; padding: 20px; margin: 25px 0;">
-            <p><strong>Ticket #:</strong> {$ticket['id']}</p>
-            <p><strong>Categoría:</strong> {$ticket['categoria']} - {$ticket['subcategoria']}</p>
-            <p><strong>Descripción:</strong> {$ticket['descripcion']}</p>
-            <p><strong>Prioridad:</strong> {$ticket['prioridad']}</p>
-            <p><strong>Estado:</strong> {$ticket['estado']}</p>
-            {$tecnicoInfo}
-        </div>
-        <div style="text-align: center; margin: 30px 0;">
-            <a href="$ticketUrl" style="background-color: #4CAF50; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold; font-size: 16px;">Ver Seguimiento del Ticket</a>
-        </div>
-        <hr style="border:none; border-top:2px solid #ececec; margin: 32px 0 15px 0;">
-        <div style="font-size: 13px; color:#777; text-align: center;">Mesa de Ayuda - ITS<br>No responder a este correo.</div>
-    </div>
-</body>
-</html>
-HTML;
-    }
-
-    public function sendTicketCreatedNotification($ticket, $employee, $hasTechnician = false, $technicianName = null)
+    public function sendTicketCreatedNotification($ticket, $employee)
     {
         $subject = "Tu ticket #{$ticket['id']} ha sido creado";
-        $htmlContent = $this->generateTicketCreatedEmail($ticket, $employee, $hasTechnician, $technicianName);
+        $htmlContent = $this->generateTicketCreatedEmail($ticket, $employee);
 
         try {
+            if (empty($employee['email']) || !filter_var($employee['email'], FILTER_VALIDATE_EMAIL)) {
+                $errorMsg = "Email del empleado inválido o vacío: " . ($employee['email'] ?? 'NO DEFINIDO');
+                error_log("❌ [Ticket #{$ticket['id']}] $errorMsg");
+                return false;
+            }
+
             error_log("📧 [Ticket #{$ticket['id']}] Intentando enviar correo de creación al empleado: {$employee['email']}");
             $this->sendEmail($employee['email'], $subject, $htmlContent);
             error_log("✅ [Ticket #{$ticket['id']}] Correo de creación enviado exitosamente al empleado: {$employee['email']}");
+            return true;
         } catch (\Exception $e) {
             $errorMsg = "Error enviando correo de creación al empleado {$employee['email']}: " . $e->getMessage();
             error_log("❌ [Ticket #{$ticket['id']}] $errorMsg");
             error_log("❌ [Ticket #{$ticket['id']}] Stack trace: " . $e->getTraceAsString());
+            return false;
         }
     }
 
@@ -527,6 +494,43 @@ HTML;
         } else {
             error_log("⚠️ Algunos correos no se pudieron enviar para ticket #{$ticket['id']}: " . implode('; ', $errors));
         }
+    }
+
+    private function generateTicketCreatedEmail($ticket, $employee)
+    {
+        $baseUrl = $this->getFrontendUrl();
+        $ticketUrl = "$baseUrl/tickets/tracking?ticketId={$ticket['id']}";
+
+        return <<<HTML
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Ticket Creado</title>
+</head>
+<body style="font-family: Arial, sans-serif; background: #f8f9fa; margin:0; padding:0;">
+    <div style="max-width: 600px; margin: 30px auto; background: #fff; border-radius: 15px; box-shadow: 0 2px 8px #e0e0e0; padding: 30px;">
+        <h2 style="text-align: center; color: #4CAF50; margin-bottom: 10px;">✅ Ticket Creado Exitosamente</h2>
+        <hr style="border:none; border-top:2px solid #4CAF50; margin-bottom: 30px;">
+        <p>Hola <strong>{$employee['nombre']}</strong>:</p>
+        <p>Tu ticket ha sido creado exitosamente y está siendo procesado.</p>
+        <div style="background: #e8f5e9; border-left: 6px solid #4CAF50; padding: 20px; margin: 25px 0;">
+            <p><strong>Ticket #:</strong> {$ticket['id']}</p>
+            <p><strong>Categoría:</strong> {$ticket['categoria']} - {$ticket['subcategoria']}</p>
+            <p><strong>Descripción:</strong> {$ticket['descripcion']}</p>
+            <p><strong>Prioridad:</strong> {$ticket['prioridad']}</p>
+            <p><strong>Estado:</strong> Pendiente de asignación</p>
+        </div>
+        <p>Recibirás una notificación cuando un técnico sea asignado a tu ticket.</p>
+        <div style="text-align: center; margin: 30px 0;">
+            <a href="$ticketUrl" style="background-color: #4CAF50; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold; font-size: 16px;">Ver Seguimiento del Ticket</a>
+        </div>
+        <hr style="border:none; border-top:2px solid #ececec; margin: 32px 0 15px 0;">
+        <div style="font-size: 13px; color:#777; text-align: center;">Mesa de Ayuda - ITS<br>No responder a este correo.</div>
+    </div>
+</body>
+</html>
+HTML;
     }
 
     private function generateTicketClosedEmail($ticket, $employee)

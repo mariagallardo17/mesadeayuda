@@ -73,9 +73,24 @@ export class NotificationService {
    */
   private fetchNotificationsFromBackend(): Observable<any> {
     // El backend usa el token JWT para obtener el usuario, no necesita ID en la URL
+    console.log('📧 [NOTIFICACIONES] Solicitando notificaciones desde:', `${this.apiUrl}`);
     return this.http.get(`${this.apiUrl}`).pipe(
+      tap(response => {
+        console.log('✅ [NOTIFICACIONES] Respuesta del backend:', response);
+        if (Array.isArray(response)) {
+          console.log(`📊 [NOTIFICACIONES] Se recibieron ${response.length} notificaciones`);
+        } else {
+          console.warn('⚠️ [NOTIFICACIONES] Respuesta no es un array:', response);
+        }
+      }),
       catchError(error => {
-        console.error('Error fetching notifications from backend:', error);
+        console.error('❌ [NOTIFICACIONES] Error fetching notifications from backend:', error);
+        console.error('❌ [NOTIFICACIONES] Error details:', {
+          status: error?.status,
+          statusText: error?.statusText,
+          message: error?.message,
+          url: error?.url
+        });
         return new Observable(observer => {
           observer.next([]);
           observer.complete();
@@ -93,83 +108,110 @@ export class NotificationService {
       if (user) {
         try {
           const parsedUser = JSON.parse(user);
-          return parsedUser.id || null;
+          // Intentar obtener el ID de diferentes formas posibles
+          const userId = parsedUser.id || parsedUser.id_usuario || parsedUser.userId || null;
+          if (userId) {
+            const userIdNum = typeof userId === 'number' ? userId : parseInt(userId);
+            console.log(`✅ [NOTIFICACIONES] ID del usuario actual: ${userIdNum}`);
+            return userIdNum;
+          }
         } catch (error) {
+          console.error('❌ [NOTIFICACIONES] Error parseando usuario del localStorage:', error);
           return null;
         }
       }
     }
+    console.warn('⚠️ [NOTIFICACIONES] No se encontró usuario en localStorage');
     return null;
   }
 
   /**
    * Mezcla notificaciones del backend con las locales
+   * IMPORTANTE: Solo usa notificaciones del backend para evitar mostrar notificaciones de otros usuarios
    */
   private mergeBackendNotifications(backendResponse: any): void {
     // El backend devuelve un array directamente, no un objeto con 'notifications'
+    console.log('🔄 [NOTIFICACIONES] Procesando respuesta del backend:', backendResponse);
+    
     if (!backendResponse || !Array.isArray(backendResponse)) {
+      console.warn('⚠️ [NOTIFICACIONES] Respuesta del backend no válida o no es un array:', backendResponse);
+      console.warn('⚠️ [NOTIFICACIONES] Tipo de respuesta:', typeof backendResponse);
       return;
     }
+    
+    if (backendResponse.length === 0) {
+      console.log('ℹ️ [NOTIFICACIONES] No hay notificaciones en la respuesta del backend');
+    }
+
+    // Obtener el ID del usuario actual para validar
+    const currentUserId = this.getCurrentUserId();
 
     const backendNotifications = backendResponse.map((n: any) => ({
       id: (n.id_notificacion || n.id || '').toString(),
       type: (n.tipo || n.type || 'info') as 'info' | 'success' | 'warning' | 'error',
-      title: n.titulo || n.title || 'Notificación',
+      title: n.titulo || n.title || this.getTitleFromMessage(n.mensaje || n.message || ''),
       message: n.mensaje || n.message || '',
       timestamp: new Date(n.fecha_envio || n.fecha_creacion || n.timestamp || Date.now()),
       read: (n.leida !== undefined ? n.leida : (n.read || false)) === 1 || (n.read === true),
       actionUrl: n.actionUrl,
-      ticketId: (n.id_ticket || n.ticketId) ? (n.id_ticket || n.ticketId).toString() : undefined
+      ticketId: (n.id_ticket || n.ticketId) ? (n.id_ticket || n.ticketId).toString() : undefined,
+      userId: n.id_usuario || n.userId // Agregar userId para validación
     }));
 
-    // Obtener notificaciones actuales
-    const currentNotifications = this.notificationsSubject.value;
-
-    // Crear un mapa de notificaciones del backend por ID
-    const backendNotificationsMap = new Map<string, Notification>();
-    backendNotifications.forEach((notif: Notification) => {
-      backendNotificationsMap.set(notif.id, notif);
-    });
-
-    // Crear un mapa de notificaciones locales por ID
-    const localNotificationsMap = new Map<string, Notification>();
-    currentNotifications.forEach((notif: Notification) => {
-      localNotificationsMap.set(notif.id, notif);
-    });
-
-    // Mezclar: priorizar el estado del backend pero mantener notificaciones locales nuevas
-    const mergedNotifications: Notification[] = [];
-    const processedIds = new Set<string>();
-    const processedContent = new Set<string>(); // Para evitar duplicados por contenido
-
-    // Primero agregar todas las notificaciones del backend (tienen prioridad)
-    backendNotifications.forEach((backendNotif: Notification) => {
-      mergedNotifications.push(backendNotif);
-      processedIds.add(backendNotif.id);
-      // Crear clave única por contenido para evitar duplicados
-      const contentKey = `${backendNotif.title}_${backendNotif.message}_${backendNotif.ticketId || ''}`;
-      processedContent.add(contentKey);
-    });
-
-    // Luego agregar notificaciones locales que no están en el backend ni duplicadas por contenido
-    currentNotifications.forEach((localNotif: Notification) => {
-      if (!processedIds.has(localNotif.id)) {
-        // Verificar si el contenido ya existe (evitar duplicados)
-        const contentKey = `${localNotif.title}_${localNotif.message}_${localNotif.ticketId || ''}`;
-        if (!processedContent.has(contentKey)) {
-          mergedNotifications.push(localNotif);
-          processedContent.add(contentKey);
+    // FILTRAR CRÍTICO: Solo mostrar notificaciones que pertenecen al usuario actual
+    // Esto es una doble validación de seguridad además del filtrado del backend
+    let notificacionesValidas = backendNotifications;
+    
+    if (currentUserId) {
+      const notificacionesInvalidas: any[] = [];
+      notificacionesValidas = backendNotifications.filter((notif: any) => {
+        const notifUserId = notif.userId ? parseInt(notif.userId) : null;
+        
+        // Solo incluir notificaciones que pertenecen al usuario actual
+        if (notifUserId === currentUserId) {
+          return true;
+        } else {
+          notificacionesInvalidas.push(notif);
+          console.warn(`🚫 [NOTIFICACIONES] FILTRADA: Notificación ID ${notif.id} pertenece a usuario ${notifUserId}, pero el usuario actual es ${currentUserId}`);
+          return false;
         }
+      });
+      
+      if (notificacionesInvalidas.length > 0) {
+        console.error(`❌ [NOTIFICACIONES] ERROR CRÍTICO: Se filtraron ${notificacionesInvalidas.length} notificaciones que no pertenecen al usuario ${currentUserId}`);
+        console.error(`❌ [NOTIFICACIONES] Esto indica un problema grave - las notificaciones se están creando o consultando incorrectamente`);
       }
-    });
+    } else {
+      console.warn('⚠️ [NOTIFICACIONES] No se pudo obtener el ID del usuario actual - no se puede validar notificaciones');
+    }
 
     // Ordenar por timestamp (más recientes primero)
-    mergedNotifications.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
+    notificacionesValidas.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 
-    // Actualizar el subject
-    this.notificationsSubject.next(mergedNotifications.slice(0, 50)); // Mantener solo las últimas 50
+    // Actualizar el subject SOLO con notificaciones válidas del usuario actual
+    this.notificationsSubject.next(notificacionesValidas.slice(0, 50)); // Mantener solo las últimas 50
     this.updateUnreadCount();
     this.saveNotificationsToStorage();
+  }
+
+  /**
+   * Extrae el título del mensaje si no viene en la respuesta
+   */
+  private getTitleFromMessage(message: string): string {
+    if (message.includes('ha sido creado exitosamente')) {
+      return 'Ticket Creado';
+    } else if (message.includes('ha sido asignado')) {
+      return 'Ticket Asignado';
+    } else if (message.includes('cambió de estado')) {
+      return 'Estado Actualizado';
+    } else if (message.includes('ha sido cerrado')) {
+      return 'Ticket Cerrado';
+    } else if (message.includes('ha sido escalado')) {
+      return 'Ticket Escalado';
+    } else if (message.includes('ha sido reabierto')) {
+      return 'Ticket Reabierto';
+    }
+    return 'Notificación';
   }
 
   /**
@@ -363,21 +405,18 @@ export class NotificationService {
 
   /**
    * Carga las notificaciones desde localStorage
+   * IMPORTANTE: Solo carga notificaciones si no hay notificaciones del backend aún
    */
   private loadNotificationsFromStorage(): void {
     if (typeof window !== 'undefined') {
       try {
-        const stored = localStorage.getItem('notifications');
-        if (stored) {
-          const notifications = JSON.parse(stored).map((n: any) => ({
-            ...n,
-            timestamp: new Date(n.timestamp)
-          }));
-          this.notificationsSubject.next(notifications);
-          this.updateUnreadCount();
-        }
+        // NO cargar notificaciones antiguas del localStorage
+        // Solo confiar en las notificaciones del backend que ya están filtradas por usuario
+        // Limpiar localStorage de notificaciones para evitar mostrar notificaciones de otros usuarios
+        localStorage.removeItem('notifications');
+        console.log('✅ Limpiado localStorage de notificaciones. Solo se usarán notificaciones del backend.');
       } catch (error) {
-        console.error('Error loading notifications from storage:', error);
+        console.error('Error limpiando notificaciones del storage:', error);
       }
     }
   }

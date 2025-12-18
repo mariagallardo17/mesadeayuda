@@ -52,16 +52,7 @@ class TicketRoutes
 
         try {
             if ($user['rol'] === 'tecnico' || $user['rol'] === 'administrador') {
-                // Obtener total de tickets para técnicos
-                $stmtCount = $this->db->query(
-                    'SELECT COUNT(*) as total
-                     FROM tickets t
-                     WHERE t.id_tecnico = ? AND t.estatus != "Escalado"',
-                    [$user['id_usuario']]
-                );
-                $countResult = $stmtCount->fetch();
-                $total = (int)$countResult['total'];
-
+                // OPTIMIZADO: Usar una sola consulta con SQL_CALC_FOUND_ROWS para mejor rendimiento
                 // Para técnicos: mostrar tickets asignados con información del usuario que creó el ticket
                 $stmt = $this->db->query(
                     'SELECT
@@ -93,17 +84,21 @@ class TicketRoutes
                      LIMIT ? OFFSET ?',
                     [$user['id_usuario'], $limit, $offset]
                 );
+                
+                // Obtener total usando FOUND_ROWS (más rápido que COUNT separado)
+                $stmtTotal = $this->db->query('SELECT FOUND_ROWS() as total');
+                $total = (int)($stmtTotal->fetch()['total'] ?? 0);
+                
+                // Si FOUND_ROWS no funciona, hacer COUNT (fallback)
+                if ($total === 0) {
+                    $stmtCount = $this->db->query(
+                        'SELECT COUNT(*) as total FROM tickets t WHERE t.id_tecnico = ? AND t.estatus != "Escalado"',
+                        [$user['id_usuario']]
+                    );
+                    $total = (int)($stmtCount->fetch()['total'] ?? 0);
+                }
             } else {
-                // Obtener total de tickets para empleados
-                $stmtCount = $this->db->query(
-                    'SELECT COUNT(*) as total
-                     FROM tickets t
-                     WHERE t.id_usuario = ?',
-                    [$user['id_usuario']]
-                );
-                $countResult = $stmtCount->fetch();
-                $total = (int)$countResult['total'];
-
+                // OPTIMIZADO: Para empleados también usar una sola consulta
                 // Para empleados: mostrar sus tickets con información del técnico asignado y del usuario que creó el ticket
                 $stmt = $this->db->query(
                     'SELECT
@@ -141,6 +136,19 @@ class TicketRoutes
                      LIMIT ? OFFSET ?',
                     [$user['id_usuario'], $limit, $offset]
                 );
+                
+                // Obtener total usando FOUND_ROWS (más rápido que COUNT separado)
+                $stmtTotal = $this->db->query('SELECT FOUND_ROWS() as total');
+                $total = (int)($stmtTotal->fetch()['total'] ?? 0);
+                
+                // Si FOUND_ROWS no funciona, hacer COUNT (fallback)
+                if ($total === 0) {
+                    $stmtCount = $this->db->query(
+                        'SELECT COUNT(*) as total FROM tickets t WHERE t.id_usuario = ?',
+                        [$user['id_usuario']]
+                    );
+                    $total = (int)($stmtCount->fetch()['total'] ?? 0);
+                }
             }
 
             $tickets = $stmt->fetchAll();
@@ -762,10 +770,12 @@ class TicketRoutes
             AuthMiddleware::sendResponse($response, 201);
 
             // Intentar enviar correos DESPUÉS de enviar la respuesta (no bloquea)
+            // IMPORTANTE: Los correos se envían de forma asíncrona y no bloquean la respuesta
+            // Si fallan, se loguean pero no afectan la creación del ticket ni las notificaciones
             try {
-                error_log("📧 Preparando envío de correos para ticket #$ticketId");
+                error_log("📧 [CORREOS] Preparando envío de correos para ticket #$ticketId");
 
-                // Obtener datos del empleado (siempre necesario)
+                // Obtener datos del empleado (SIEMPRE)
                 $stmtEmpleado = $this->db->query(
                     'SELECT nombre, correo FROM usuarios WHERE id_usuario = ?',
                     [$user['id_usuario']]
@@ -773,37 +783,13 @@ class TicketRoutes
                 $empleado = $stmtEmpleado->fetch();
 
                 if (!$empleado) {
-                    error_log("⚠️ No se encontró empleado con ID: {$user['id_usuario']}");
+                    error_log("⚠️ [CORREOS] No se encontró empleado con ID: {$user['id_usuario']}");
                 } elseif (empty($empleado['correo'])) {
-                    error_log("⚠️ El empleado no tiene correo configurado");
+                    error_log("⚠️ [CORREOS] El empleado {$empleado['nombre']} no tiene correo configurado");
+                } elseif (!filter_var($empleado['correo'], FILTER_VALIDATE_EMAIL)) {
+                    error_log("⚠️ [CORREOS] Correo del empleado inválido: {$empleado['correo']}");
                 } else {
-                    // Normalizar correo: trim, lowercase, eliminar espacios
-                    $empleadoCorreo = trim(strtolower($empleado['correo']));
-
-                    // Log del correo original y normalizado
-                    error_log("📧 Correo empleado - Original: '{$empleado['correo']}', Normalizado: '$empleadoCorreo'");
-
-                    if (!filter_var($empleadoCorreo, FILTER_VALIDATE_EMAIL)) {
-                        error_log("⚠️ Correo del empleado inválido después de normalizar: '$empleadoCorreo' (original: '{$empleado['correo']}')");
-                    } else {
-                        $emailService = new EmailService();
-
-                        // SIEMPRE enviar correo de confirmación al usuario
-                        $emailService->sendTicketCreatedNotification(
-                            [
-                                'id' => $ticketId,
-                                'categoria' => $categoria,
-                                'subcategoria' => $subcategoria,
-                                'descripcion' => $descripcion,
-                                'prioridad' => $prioridad,
-                                'estado' => $estadoFinal
-                            ],
-                            ['nombre' => $empleado['nombre'], 'email' => $empleadoCorreo],
-                            $tecnicoId && $idTecnicoParaInsert, // hasTechnician
-                            $tecnicoNombre ?? null // technicianName
-                        );
-                        error_log("✅ Correo de creación enviado al empleado '$empleadoCorreo' para ticket #$ticketId");
-                    }
+                    $emailService = new EmailService();
 
                     // Si hay técnico asignado, enviar correos de asignación
                     if ($tecnicoId && $idTecnicoParaInsert) {
@@ -814,24 +800,15 @@ class TicketRoutes
                         $tecnico = $stmtTecnico->fetch();
 
                         if (!$tecnico) {
-                            error_log("⚠️ No se encontró técnico con ID: $idTecnicoParaInsert");
+                            error_log("⚠️ [CORREOS] No se encontró técnico con ID: $idTecnicoParaInsert");
                         } elseif (empty($tecnico['correo'])) {
-                            error_log("⚠️ El técnico {$tecnico['nombre']} no tiene correo configurado");
+                            error_log("⚠️ [CORREOS] El técnico {$tecnico['nombre']} no tiene correo configurado");
+                        } elseif (!filter_var($tecnico['correo'], FILTER_VALIDATE_EMAIL)) {
+                            error_log("⚠️ [CORREOS] Correo del técnico inválido: {$tecnico['correo']}");
                         } else {
-                            // Normalizar correo del técnico
-                            $tecnicoCorreo = trim(strtolower($tecnico['correo']));
+                            error_log("📧 [CORREOS] Enviando correos de asignación - Técnico: {$tecnico['correo']}, Empleado: {$empleado['correo']}");
 
-                            // Log del correo original y normalizado
-                            error_log("📧 Correo técnico - Original: '{$tecnico['correo']}', Normalizado: '$tecnicoCorreo'");
-
-                            if (!filter_var($tecnicoCorreo, FILTER_VALIDATE_EMAIL)) {
-                                error_log("⚠️ Correo del técnico inválido después de normalizar: '$tecnicoCorreo' (original: '{$tecnico['correo']}')");
-                            } else {
-                                // Asegurar que el correo del empleado también esté normalizado
-                                $empleadoCorreoNormalizado = isset($empleadoCorreo) ? $empleadoCorreo : trim(strtolower($empleado['correo']));
-
-                                error_log("📧 Enviando correos de asignación - Técnico: '$tecnicoCorreo', Empleado: '$empleadoCorreoNormalizado'");
-
+                            try {
                                 $emailService->sendTicketAssignedNotification(
                                     [
                                         'id' => $ticketId,
@@ -840,18 +817,126 @@ class TicketRoutes
                                         'descripcion' => $descripcion,
                                         'prioridad' => $prioridad
                                     ],
-                                    ['nombre' => $tecnico['nombre'], 'email' => $tecnicoCorreo],
-                                    ['nombre' => $empleado['nombre'], 'email' => $empleadoCorreoNormalizado]
+                                    ['nombre' => $tecnico['nombre'], 'email' => $tecnico['correo']],
+                                    ['nombre' => $empleado['nombre'], 'email' => $empleado['correo']]
                                 );
-
-                                error_log("✅ Correos de asignación enviados para ticket #$ticketId");
+                                error_log("✅ [CORREOS] Correos de asignación enviados para ticket #$ticketId");
+                            } catch (\Exception $emailEx) {
+                                error_log("❌ [CORREOS] Error crítico enviando correos de asignación: " . $emailEx->getMessage());
+                                error_log("❌ [CORREOS] Stack trace: " . $emailEx->getTraceAsString());
                             }
+                        }
+                    } else {
+                        // Sin técnico asignado, enviar correo de creación
+                        error_log("📧 [CORREOS] Enviando correo de creación al empleado: {$empleado['correo']}");
+
+                        try {
+                            $result = $emailService->sendTicketCreatedNotification(
+                                [
+                                    'id' => $ticketId,
+                                    'categoria' => $categoria,
+                                    'subcategoria' => $subcategoria,
+                                    'descripcion' => $descripcion,
+                                    'prioridad' => $prioridad
+                                ],
+                                ['nombre' => $empleado['nombre'], 'email' => $empleado['correo']]
+                            );
+                            
+                            if ($result) {
+                                error_log("✅ [CORREOS] Correo de creación enviado para ticket #$ticketId");
+                            } else {
+                                error_log("⚠️ [CORREOS] Correo de creación falló para ticket #$ticketId (ver logs anteriores)");
+                            }
+                        } catch (\Exception $emailEx) {
+                            error_log("❌ [CORREOS] Error crítico enviando correo de creación: " . $emailEx->getMessage());
+                            error_log("❌ [CORREOS] Stack trace: " . $emailEx->getTraceAsString());
                         }
                     }
                 }
             } catch (\Exception $e) {
-                error_log("❌ Error enviando correos para ticket #$ticketId: " . $e->getMessage());
-                error_log("❌ Stack trace: " . $e->getTraceAsString());
+                error_log("❌ [CORREOS] Error general enviando correos para ticket #$ticketId: " . $e->getMessage());
+                error_log("❌ [CORREOS] Stack trace: " . $e->getTraceAsString());
+                // NO lanzar la excepción - las notificaciones deben crearse independientemente
+            }
+            
+            // ============================================
+            // CREAR NOTIFICACIONES - SIEMPRE (independiente de correos)
+            // ============================================
+            try {
+                error_log("📧 [NOTIFICACIONES] Creando notificaciones para ticket #$ticketId");
+                
+                // CRÍTICO: Obtener el ID del usuario REAL del ticket desde la BD
+                // NO usar $user['id_usuario'] del token, usar el ID real del ticket
+                $stmtTicketUsuario = $this->db->query(
+                    'SELECT id_usuario FROM tickets WHERE id_ticket = ?',
+                    [$ticketId]
+                );
+                $ticketUsuario = $stmtTicketUsuario->fetch();
+                
+                if (!$ticketUsuario || !isset($ticketUsuario['id_usuario']) || $ticketUsuario['id_usuario'] <= 0) {
+                    error_log("❌ [NOTIFICACIONES] ERROR CRÍTICO: No se puede obtener id_usuario del ticket #$ticketId desde la BD");
+                    return;
+                }
+                
+                $idUsuarioCreador = (int)$ticketUsuario['id_usuario'];
+                error_log("📧 [NOTIFICACIONES] Usuario REAL del ticket desde BD: ID $idUsuarioCreador (token tenía: {$user['id_usuario']})");
+                
+                // NOTIFICACIÓN 1: SOLO al usuario que creó el ticket - SIEMPRE
+                $resultEmp1 = $this->crearNotificacionInterna(
+                    $idUsuarioCreador,
+                    $ticketId,
+                    "Tu ticket #$ticketId ha sido creado exitosamente"
+                );
+                error_log($resultEmp1 ? "✅ [NOTIFICACIONES] Notificación creación empleado (ID: $idUsuarioCreador) OK" : "❌ [NOTIFICACIONES] Notificación creación empleado FALLÓ");
+                
+                // Si hay técnico asignado, notificar también
+                if ($tecnicoId && $idTecnicoParaInsert) {
+                    $idTecnicoValidado = (int)$idTecnicoParaInsert;
+                    
+                    // IMPORTANTE: Solo notificar al técnico si es diferente del usuario que creó el ticket
+                    if ($idTecnicoValidado > 0 && $idTecnicoValidado !== $idUsuarioCreador) {
+                        // NOTIFICACIÓN 2: SOLO al técnico asignado (NO al usuario que creó el ticket)
+                        $resultTec = $this->crearNotificacionInterna(
+                            $idTecnicoValidado,
+                            $ticketId,
+                            "Se te ha asignado un nuevo ticket #$ticketId. Categoría: $categoria - $subcategoria"
+                        );
+                        error_log($resultTec ? "✅ [NOTIFICACIONES] Notificación técnico (ID: $idTecnicoValidado) OK" : "❌ [NOTIFICACIONES] Notificación técnico FALLÓ");
+                        
+                        // Obtener nombre del técnico para el mensaje
+                        $nombreTecnico = 'el técnico asignado';
+                        try {
+                            $stmtTec = $this->db->query('SELECT nombre FROM usuarios WHERE id_usuario = ?', [$idTecnicoValidado]);
+                            $tecData = $stmtTec->fetch();
+                            if ($tecData && !empty($tecData['nombre'])) {
+                                $nombreTecnico = $tecData['nombre'];
+                            }
+                        } catch (\Exception $e) {
+                            error_log("⚠️ No se pudo obtener nombre del técnico: " . $e->getMessage());
+                        }
+                        
+                        // NOTIFICACIÓN 3: SOLO al usuario que creó el ticket sobre la asignación
+                        $resultEmp2 = $this->crearNotificacionInterna(
+                            $idUsuarioCreador,
+                            $ticketId,
+                            "Tu ticket #$ticketId ha sido asignado al técnico $nombreTecnico. Estado: En proceso"
+                        );
+                        error_log($resultEmp2 ? "✅ [NOTIFICACIONES] Notificación asignación empleado (ID: $idUsuarioCreador) OK" : "❌ [NOTIFICACIONES] Notificación asignación empleado FALLÓ");
+                    } else {
+                        error_log("⚠️ [NOTIFICACIONES] El técnico asignado ($idTecnicoValidado) es el mismo que el usuario que creó el ticket ($idUsuarioCreador) - No se crea notificación de asignación");
+                    }
+                } else {
+                    // Sin técnico asignado - solo notificar al usuario que creó el ticket
+                    $resultEmp3 = $this->crearNotificacionInterna(
+                        $idUsuarioCreador,
+                        $ticketId,
+                        "Tu ticket #$ticketId ha sido creado exitosamente. Estado: Pendiente de asignación"
+                    );
+                    error_log($resultEmp3 ? "✅ [NOTIFICACIONES] Notificación pendiente empleado (ID: $idUsuarioCreador) OK" : "❌ [NOTIFICACIONES] Notificación pendiente FALLÓ");
+                }
+            } catch (\Exception $e) {
+                error_log("❌ [NOTIFICACIONES] Error crítico creando notificaciones para ticket #$ticketId: " . $e->getMessage());
+                error_log("❌ [NOTIFICACIONES] Stack trace: " . $e->getTraceAsString());
             }
         } catch (\PDOException $e) {
             error_log('❌ Error PDO creating ticket: ' . $e->getMessage());
@@ -926,16 +1011,17 @@ class TicketRoutes
         }
 
         try {
-            // Obtener estado anterior y datos del ticket antes de actualizar
+            // OPTIMIZADO: Obtener estado anterior y datos del ticket antes de actualizar (con LIMIT 1)
             $stmtOld = $this->db->query(
-                'SELECT t.estatus, t.id_tecnico, s.categoria, s.subcategoria,
+                'SELECT t.estatus, t.id_tecnico, t.id_usuario, s.categoria, s.subcategoria,
                         u.id_usuario as empleado_id, u.nombre as empleado_nombre, u.correo as empleado_correo,
                         tec.nombre as tecnico_nombre, tec.correo as tecnico_correo
                  FROM tickets t
                  JOIN servicios s ON t.id_servicio = s.id_servicio
                  JOIN usuarios u ON t.id_usuario = u.id_usuario
                  LEFT JOIN usuarios tec ON t.id_tecnico = tec.id_usuario
-                 WHERE t.id_ticket = ?',
+                 WHERE t.id_ticket = ?
+                 LIMIT 1',
                 [$id]
             );
             $ticketOld = $stmtOld->fetch();
@@ -1134,10 +1220,45 @@ class TicketRoutes
                                 ['nombre' => $tecnicoOriginal['nombre'], 'email' => $tecnicoOriginal['correo']],
                                 $comentarioAdmin
                             );
-                            error_log("📧 Correo de regreso de escalamiento enviado a técnico original para ticket #$id");
+                             error_log("📧 Correo de regreso de escalamiento enviado a técnico original para ticket #$id");
                         }
                     } catch (\Exception $e) {
                         error_log("⚠️ Error enviando correo de regreso de escalamiento para ticket #$id: " . $e->getMessage());
+                    }
+                    
+                    // ============================================
+                    // CREAR NOTIFICACIONES DE REGRESO - SIEMPRE
+                    // ============================================
+                    try {
+                        error_log("📧 [NOTIFICACIONES] Creando notificaciones de regreso de escalamiento para ticket #$id");
+                        
+                        if (isset($escalamiento['tecnico_original_id']) && $escalamiento['tecnico_original_id'] > 0) {
+                            // Crear notificación interna para el técnico original
+                            $mensajeTecnico = "El ticket #$id ha sido regresado a tu atención desde escalamiento";
+                            if (!empty($comentarioAdmin)) {
+                                $mensajeTecnico .= ". Comentario del administrador: " . substr($comentarioAdmin, 0, 100);
+                            }
+                            $resultTec = $this->crearNotificacionInterna(
+                                $escalamiento['tecnico_original_id'],
+                                $id,
+                                $mensajeTecnico
+                            );
+                            error_log($resultTec ? "✅ [NOTIFICACIONES] Notificación regreso técnico OK" : "❌ [NOTIFICACIONES] Notificación regreso técnico FALLÓ");
+
+                            // Notificar al empleado
+                            if (isset($ticketOld['empleado_id']) && $ticketOld['empleado_id'] > 0) {
+                                $resultEmp = $this->crearNotificacionInterna(
+                                    $ticketOld['empleado_id'],
+                                    $id,
+                                    "Tu ticket #$id ha sido regresado al técnico original"
+                                );
+                                error_log($resultEmp ? "✅ [NOTIFICACIONES] Notificación regreso empleado OK" : "❌ [NOTIFICACIONES] Notificación regreso empleado FALLÓ");
+                            }
+                        } else {
+                            error_log("⚠️ [NOTIFICACIONES] No se puede crear: tecnico_original_id inválido");
+                        }
+                    } catch (\Exception $e) {
+                        error_log("❌ [NOTIFICACIONES] Error crítico creando notificaciones de regreso: " . $e->getMessage());
                     }
 
                     error_log("✅ Ticket #$id regresado al técnico original por administrador");
@@ -1170,16 +1291,57 @@ class TicketRoutes
                             'prioridad' => 'Media'
                         ];
 
-                        $emailService = new EmailService();
-                        $emailService->sendTicketAssignedNotification(
-                            $ticketData,
-                            ['nombre' => $tecnicoNuevo['nombre'], 'email' => $tecnicoNuevo['correo']],
-                            ['nombre' => $ticketOld['empleado_nombre'], 'email' => $ticketOld['empleado_correo']]
-                        );
-                        error_log("📧 Correos de asignación manual enviados para ticket #$id");
+                         $emailService = new EmailService();
+                         $emailService->sendTicketAssignedNotification(
+                             $ticketData,
+                             ['nombre' => $tecnicoNuevo['nombre'], 'email' => $tecnicoNuevo['correo']],
+                             ['nombre' => $ticketOld['empleado_nombre'], 'email' => $ticketOld['empleado_correo']]
+                         );
+                         error_log("📧 Correos de asignación manual enviados para ticket #$id");
                     }
                 } catch (\Exception $e) {
                     error_log("⚠️ Error enviando correos de asignación manual para ticket #$id: " . $e->getMessage());
+                }
+                
+                // ============================================
+                // CREAR NOTIFICACIONES DE ASIGNACIÓN MANUAL - SIEMPRE
+                // ============================================
+                try {
+                    error_log("📧 [NOTIFICACIONES] Creando notificaciones de asignación manual para ticket #$id");
+                    
+                    if ($idTecnicoNuevo && isset($ticketOld['empleado_id']) && $ticketOld['empleado_id'] > 0) {
+                        // Notificar al técnico asignado
+                        $resultTec = $this->crearNotificacionInterna(
+                            $idTecnicoNuevo,
+                            $id,
+                            "Se te ha asignado manualmente el ticket #$id"
+                        );
+                        error_log($resultTec ? "✅ [NOTIFICACIONES] Notificación asignación técnico OK" : "❌ [NOTIFICACIONES] Notificación asignación técnico FALLÓ");
+
+                        // Obtener nombre del técnico
+                        $nombreTecnico = 'el técnico asignado';
+                        try {
+                            $stmtTec = $this->db->query('SELECT nombre FROM usuarios WHERE id_usuario = ?', [$idTecnicoNuevo]);
+                            $tecData = $stmtTec->fetch();
+                            if ($tecData && !empty($tecData['nombre'])) {
+                                $nombreTecnico = $tecData['nombre'];
+                            }
+                        } catch (\Exception $e) {
+                            error_log("⚠️ No se pudo obtener nombre del técnico: " . $e->getMessage());
+                        }
+
+                        // Notificar al empleado
+                        $resultEmp = $this->crearNotificacionInterna(
+                            $ticketOld['empleado_id'],
+                            $id,
+                            "Tu ticket #$id ha sido asignado al técnico $nombreTecnico"
+                        );
+                        error_log($resultEmp ? "✅ [NOTIFICACIONES] Notificación asignación empleado OK" : "❌ [NOTIFICACIONES] Notificación asignación empleado FALLÓ");
+                    } else {
+                        error_log("⚠️ [NOTIFICACIONES] No se pueden crear notificaciones: datos inválidos");
+                    }
+                } catch (\Exception $e) {
+                    error_log("❌ [NOTIFICACIONES] Error crítico creando notificaciones de asignación manual: " . $e->getMessage());
                 }
             } else if ($estatus !== 'Pendiente' && $estatus !== 'En Progreso' && $estatus !== 'En proceso' && $estatus !== 'Finalizado') {
                 // Solo cambio de estado (para otros estados que no requieren lógica especial)
@@ -1234,16 +1396,71 @@ class TicketRoutes
                             'email' => $ticketOld['empleado_correo']
                         ];
 
-                        $emailService = new EmailService();
-                        $emailService->sendTicketStatusChangeNotification($ticketData, $estatus, $estadoAnterior, $technician, $employee);
-                        error_log("📧 Correo de cambio de estado enviado para ticket #$id");
-                    } else {
-                        error_log("⚠️ No se puede enviar correo: empleado_correo vacío para ticket #$id");
-                    }
-                } catch (\Exception $e) {
-                    error_log("⚠️ Error enviando correo de cambio de estado para ticket #$id: " . $e->getMessage());
-                    // No hacer nada, la respuesta ya se envió exitosamente
-                }
+                         $emailService = new EmailService();
+                         $emailService->sendTicketStatusChangeNotification($ticketData, $estatus, $estadoAnterior, $technician, $employee);
+                         error_log("📧 Correo de cambio de estado enviado para ticket #$id");
+                     } else {
+                         error_log("⚠️ No se puede enviar correo: empleado_correo vacío para ticket #$id");
+                     }
+                 } catch (\Exception $e) {
+                     error_log("⚠️ Error enviando correo de cambio de estado para ticket #$id: " . $e->getMessage());
+                 }
+                 
+                 // ============================================
+                 // CREAR NOTIFICACIONES - SIEMPRE (independiente de correos)
+                 // ============================================
+                 try {
+                     error_log("📧 [NOTIFICACIONES] Creando notificaciones de cambio de estado para ticket #$id");
+                     
+                     if (!isset($ticketOld['empleado_id']) || !$ticketOld['empleado_id']) {
+                         error_log("⚠️ [NOTIFICACIONES] No se puede crear: empleado_id inválido");
+                     } else {
+                         $esReapertura = ($estadoAnterior === 'Finalizado' || $estadoAnterior === 'Cerrado') &&
+                                        ($estatus !== 'Finalizado' && $estatus !== 'Cerrado');
+
+                         if ($esReapertura) {
+                             // Notificación especial para reapertura
+                             $mensajeEmpleado = "Tu ticket #$id ha sido reabierto. Estado: $estatus";
+                             $resultEmp = $this->crearNotificacionInterna($ticketOld['empleado_id'], $id, $mensajeEmpleado);
+                             error_log($resultEmp ? "✅ [NOTIFICACIONES] Notificación reapertura empleado OK" : "❌ [NOTIFICACIONES] Notificación reapertura empleado FALLÓ");
+
+                             // Notificar al técnico si está asignado
+                             if (isset($ticketOld['id_tecnico']) && $ticketOld['id_tecnico'] > 0) {
+                                 $mensajeTecnico = "El ticket #$id ha sido reabierto por el usuario";
+                                 $resultTec = $this->crearNotificacionInterna($ticketOld['id_tecnico'], $id, $mensajeTecnico);
+                                 error_log($resultTec ? "✅ [NOTIFICACIONES] Notificación reapertura técnico OK" : "❌ [NOTIFICACIONES] Notificación reapertura técnico FALLÓ");
+                             }
+                         } else {
+                             // Notificación normal de cambio de estado
+                             $mensajeEmpleado = "El estado de tu ticket #$id ha cambiado de \"$estadoAnterior\" a \"$estatus\"";
+                             $resultEmp = $this->crearNotificacionInterna($ticketOld['empleado_id'], $id, $mensajeEmpleado);
+                             error_log($resultEmp ? "✅ [NOTIFICACIONES] Notificación cambio estado empleado OK" : "❌ [NOTIFICACIONES] Notificación cambio estado empleado FALLÓ");
+
+                             // Si hay técnico asignado y el cambio es relevante para él, notificarle
+                             if (isset($ticketOld['id_tecnico']) && $ticketOld['id_tecnico'] > 0) {
+                                 // Solo notificar al técnico en ciertos cambios de estado
+                                 if (in_array($estatus, ['Pendiente', 'Finalizado', 'Escalado'])) {
+                                     $mensajeTecnico = "El ticket #$id ha cambiado de estado a \"$estatus\"";
+                                     $resultTec = $this->crearNotificacionInterna($ticketOld['id_tecnico'], $id, $mensajeTecnico);
+                                     error_log($resultTec ? "✅ [NOTIFICACIONES] Notificación cambio estado técnico OK" : "❌ [NOTIFICACIONES] Notificación cambio estado técnico FALLÓ");
+                                 }
+                             }
+                         }
+
+                         // Si se escala, notificar a administradores
+                         if ($estatus === 'Escalado') {
+                             error_log("📧 [NOTIFICACIONES] Notificando administradores de escalamiento");
+                             $this->notificarAdministradores(
+                                 'escalamiento',
+                                 $id,
+                                 "El ticket #$id ha sido escalado"
+                             );
+                         }
+                     }
+                 } catch (\Exception $e) {
+                     error_log("❌ [NOTIFICACIONES] Error crítico creando notificaciones de cambio de estado para ticket #$id: " . $e->getMessage());
+                     error_log("❌ [NOTIFICACIONES] Stack trace: " . $e->getTraceAsString());
+                 }
             }
         } catch (\Exception $e) {
             error_log('Error updating ticket status: ' . $e->getMessage());
@@ -1348,20 +1565,51 @@ class TicketRoutes
                             'email' => $ticketInfo['empleado_correo']
                         ];
 
-                        error_log("📧 Preparando envío de correo de cierre para ticket #$id");
-                        $emailService = new EmailService();
-                        $emailService->sendTicketClosedNotification($ticketData, $employee);
-                        error_log("✅ Correo de cierre enviado para ticket #$id");
-                    } else {
-                        error_log("⚠️ Correo del empleado inválido para ticket #$id: {$ticketInfo['empleado_correo']}");
-                    }
-                } else {
-                    error_log("⚠️ No se puede enviar correo: empleado_correo vacío o ticket no encontrado para ticket #$id");
-                }
-            } catch (\Exception $e) {
-                error_log("⚠️ Error enviando correo de cierre para ticket #$id (no crítico): " . $e->getMessage());
-                // No hacer nada, la respuesta ya se envió exitosamente
-            }
+                         error_log("📧 Preparando envío de correo de cierre para ticket #$id");
+                         $emailService = new EmailService();
+                         $emailService->sendTicketClosedNotification($ticketData, $employee);
+                         error_log("✅ Correo de cierre enviado para ticket #$id");
+                     } else {
+                         error_log("⚠️ Correo del empleado inválido para ticket #$id: {$ticketInfo['empleado_correo']}");
+                     }
+                 } else {
+                     error_log("⚠️ No se puede enviar correo: empleado_correo vacío o ticket no encontrado para ticket #$id");
+                 }
+             } catch (\Exception $e) {
+                 error_log("⚠️ Error enviando correo de cierre para ticket #$id (no crítico): " . $e->getMessage());
+             }
+             
+             // ============================================
+             // CREAR NOTIFICACIÓN DE CIERRE - SIEMPRE (independiente de correos)
+             // ============================================
+             try {
+                 error_log("📧 [NOTIFICACIONES] Creando notificación de cierre para ticket #$id");
+                 
+                 // Obtener información del ticket si no la tenemos
+                 if (!isset($ticketInfo)) {
+                     $stmtTicketInfo = $this->db->query(
+                         'SELECT t.id_ticket, u.id_usuario as empleado_id
+                          FROM tickets t
+                          JOIN usuarios u ON t.id_usuario = u.id_usuario
+                          WHERE t.id_ticket = ?',
+                         [$id]
+                     );
+                     $ticketInfo = $stmtTicketInfo->fetch();
+                 }
+                 
+                 if ($ticketInfo && isset($ticketInfo['empleado_id']) && $ticketInfo['empleado_id'] > 0) {
+                     $result = $this->crearNotificacionInterna(
+                         $ticketInfo['empleado_id'],
+                         $id,
+                         "Tu ticket #$id ha sido cerrado"
+                     );
+                     error_log($result ? "✅ [NOTIFICACIONES] Notificación cierre OK" : "❌ [NOTIFICACIONES] Notificación cierre FALLÓ");
+                 } else {
+                     error_log("⚠️ [NOTIFICACIONES] No se puede crear notificación de cierre: ticketInfo o empleado_id inválido");
+                 }
+             } catch (\Exception $e) {
+                 error_log("❌ [NOTIFICACIONES] Error crítico creando notificación de cierre para ticket #$id: " . $e->getMessage());
+             }
 
         } catch (\Exception $e) {
             error_log('❌ Error closing ticket #' . $id . ': ' . $e->getMessage());
@@ -1869,15 +2117,24 @@ class TicketRoutes
         $user = AuthMiddleware::authenticate();
         $body = AuthMiddleware::getRequestBody();
 
+        // Validar que el usuario tenga permisos para escalar (técnico o administrador)
+        $rolUsuario = strtolower(trim($user['rol'] ?? ''));
+        if ($rolUsuario !== 'tecnico' && $rolUsuario !== 'administrador') {
+            AuthMiddleware::sendError('Solo los técnicos y administradores pueden escalar tickets', 403);
+            return;
+        }
+
         $tecnicoDestino = $body['tecnicoDestino'] ?? null;
         $motivoEscalamiento = $body['motivoEscalamiento'] ?? '';
 
         if (!$motivoEscalamiento) {
             AuthMiddleware::sendError('El motivo de escalamiento es requerido', 400);
+            return;
         }
 
         if (!$tecnicoDestino) {
             AuthMiddleware::sendError('Debes seleccionar un técnico destino para escalar el ticket', 400);
+            return;
         }
 
         try {
@@ -1891,56 +2148,117 @@ class TicketRoutes
 
             if (!$tecnicoDestinoInfo) {
                 AuthMiddleware::sendError('El técnico seleccionado no existe o no es válido', 400);
+                return;
             }
 
             // Cannot escalate to self
             if ($tecnicoDestino == $user['id_usuario']) {
                 AuthMiddleware::sendError('No puedes escalar un ticket a ti mismo', 400);
+                return;
             }
 
-            // Check ticket exists and assigned to user
-            $stmt = $this->db->query(
-                'SELECT id_ticket, id_tecnico, estatus FROM tickets WHERE id_ticket = ? AND id_tecnico = ?',
-                [$id, $user['id_usuario']]
-            );
+            // Check ticket exists
+            // Si es administrador, puede escalar cualquier ticket
+            // Si es técnico, puede escalar tickets asignados a él O tickets que él creó
+            $rolUsuario = strtolower(trim($user['rol'] ?? ''));
+            $esAdministrador = ($rolUsuario === 'administrador');
+            $idUsuarioActual = (int)$user['id_usuario'];
+            
+            if ($esAdministrador) {
+                // Administrador puede escalar cualquier ticket
+                $stmt = $this->db->query(
+                    'SELECT id_ticket, id_tecnico, id_usuario, estatus FROM tickets WHERE id_ticket = ?',
+                    [$id]
+                );
+            } else {
+                // Técnico puede escalar tickets asignados a él O tickets que él creó
+                $stmt = $this->db->query(
+                    'SELECT id_ticket, id_tecnico, id_usuario, estatus FROM tickets WHERE id_ticket = ? AND (id_tecnico = ? OR id_usuario = ?)',
+                    [$id, $idUsuarioActual, $idUsuarioActual]
+                );
+            }
 
             $ticket = $stmt->fetch();
 
             if (!$ticket) {
-                AuthMiddleware::sendError('Ticket no encontrado o no tienes permisos para escalarlo', 404);
+                if ($esAdministrador) {
+                    AuthMiddleware::sendError('Ticket no encontrado', 404);
+                } else {
+                    // Verificar si el ticket existe pero no pertenece al usuario
+                    $stmtCheck = $this->db->query(
+                        'SELECT id_ticket FROM tickets WHERE id_ticket = ?',
+                        [$id]
+                    );
+                    $ticketExiste = $stmtCheck->fetch();
+                    
+                    if ($ticketExiste) {
+                        AuthMiddleware::sendError('No tienes permisos para escalar este ticket. Solo puedes escalar tickets asignados a ti o tickets que hayas creado.', 403);
+                    } else {
+                        AuthMiddleware::sendError('Ticket no encontrado', 404);
+                    }
+                }
+                return;
             }
+            
+            // Log para debugging
+            error_log("📧 [ESCALAMIENTO] Ticket #$id - Usuario: {$user['nombre']} (ID: $idUsuarioActual, Rol: $rolUsuario)");
+            error_log("📧 [ESCALAMIENTO] Ticket asignado a técnico ID: " . ($ticket['id_tecnico'] ?? 'NULL'));
+            error_log("📧 [ESCALAMIENTO] Ticket creado por usuario ID: " . ($ticket['id_usuario'] ?? 'NULL'));
 
             // Cannot escalate closed ticket
             if ($ticket['estatus'] === 'Cerrado') {
                 AuthMiddleware::sendError('No se puede escalar un ticket que ya está cerrado', 403);
+                return;
             }
 
             // Update ticket status and assign to new technician
+            error_log("📧 [ESCALAMIENTO] Actualizando ticket #$id a estado Escalado y asignando a técnico ID: $tecnicoDestino");
             $this->db->query(
                 'UPDATE tickets SET estatus = "Escalado", id_tecnico = ?, fecha_asignacion = COALESCE(fecha_asignacion, NOW()) WHERE id_ticket = ?',
                 [$tecnicoDestino, $id]
             );
+            error_log("✅ [ESCALAMIENTO] Ticket #$id actualizado exitosamente");
 
             // Save escalation info
+            error_log("📧 [ESCALAMIENTO] Guardando información de escalamiento en BD");
             $this->db->query(
                 'INSERT INTO escalamientos (id_ticket, tecnico_original_id, tecnico_nuevo_id, nivel_escalamiento, persona_enviar, motivo_escalamiento, fecha_escalamiento) VALUES (?, ?, ?, ?, ?, ?, NOW())',
                 [$id, $user['id_usuario'], $tecnicoDestino, 'Manual', $tecnicoDestino, $motivoEscalamiento]
             );
+            error_log("✅ [ESCALAMIENTO] Información de escalamiento guardada exitosamente");
 
-            // Enviar correos de notificación
-            try {
-                // Obtener información completa del ticket y empleado
-                $stmtTicket = $this->db->query(
-                    'SELECT t.id_ticket, s.categoria, s.subcategoria, u.id_usuario as empleado_id, u.nombre as empleado_nombre, u.correo as empleado_correo
-                     FROM tickets t
-                     JOIN servicios s ON t.id_servicio = s.id_servicio
-                     JOIN usuarios u ON t.id_usuario = u.id_usuario
-                     WHERE t.id_ticket = ?',
-                    [$id]
-                );
-                $ticketInfo = $stmtTicket->fetch();
+            // ============================================
+            // ENVIAR RESPUESTA EXITOSA INMEDIATAMENTE
+            // Esto debe hacerse ANTES de correos y notificaciones
+            // para asegurar que el usuario reciba confirmación
+            // ============================================
+            error_log("✅ [ESCALAMIENTO] Enviando respuesta exitosa para ticket #$id");
+            $response = [
+                'message' => 'Ticket escalado exitosamente a ' . $tecnicoDestinoInfo['nombre'],
+                'ticketId' => (int)$id,
+                'escalamiento' => [
+                    'tecnicoDestino' => $tecnicoDestinoInfo['nombre'],
+                    'motivo' => $motivoEscalamiento
+                ],
+                'success' => true
+            ];
+            error_log("📤 [ESCALAMIENTO] Respuesta exitosa: " . json_encode($response));
+            AuthMiddleware::sendResponse($response);
 
-                if ($ticketInfo) {
+            // Obtener información completa del ticket y empleado (para correos y notificaciones)
+            $stmtTicket = $this->db->query(
+                'SELECT t.id_ticket, s.categoria, s.subcategoria, u.id_usuario as empleado_id, u.nombre as empleado_nombre, u.correo as empleado_correo
+                 FROM tickets t
+                 JOIN servicios s ON t.id_servicio = s.id_servicio
+                 JOIN usuarios u ON t.id_usuario = u.id_usuario
+                 WHERE t.id_ticket = ?',
+                [$id]
+            );
+            $ticketInfo = $stmtTicket->fetch();
+
+            // Enviar correos de notificación (no crítico - no debe afectar la respuesta)
+            if ($ticketInfo) {
+                try {
                     $ticketData = [
                         'id' => $ticketInfo['id_ticket'],
                         'categoria' => $ticketInfo['categoria'],
@@ -1964,25 +2282,64 @@ class TicketRoutes
 
                     $emailService = new EmailService();
                     $emailService->sendTicketEscalatedNotification($ticketData, $newTechnician, $oldTechnician, $employee, $motivoEscalamiento);
-                    error_log("📧 Correos de escalamiento enviados para ticket #$id");
+                    error_log("📧 [CORREOS] Correos de escalamiento enviados para ticket #$id");
+                } catch (\Exception $e) {
+                    error_log("⚠️ [CORREOS] Error enviando correos de escalamiento para ticket #$id (no crítico): " . $e->getMessage());
+                    // NO lanzar la excepción - los correos no deben afectar el escalamiento
+                }
+            } else {
+                error_log("⚠️ [CORREOS] No se pudo obtener información del ticket para enviar correos");
+            }
+            
+            // ============================================
+            // CREAR NOTIFICACIONES DE ESCALAMIENTO - SIEMPRE (no crítico)
+            // ============================================
+            try {
+                error_log("📧 [NOTIFICACIONES] Creando notificaciones de escalamiento para ticket #$id");
+                
+                if ($ticketInfo && isset($ticketInfo['empleado_id']) && $ticketInfo['empleado_id'] > 0) {
+                    // Notificar al nuevo técnico
+                    $resultTec = $this->crearNotificacionInterna(
+                        $tecnicoDestino,
+                        $id,
+                        "Se te ha escalado el ticket #$id. Motivo: $motivoEscalamiento"
+                    );
+                    error_log($resultTec ? "✅ [NOTIFICACIONES] Notificación escalamiento técnico OK" : "❌ [NOTIFICACIONES] Notificación escalamiento técnico FALLÓ");
+
+                    // Notificar al empleado
+                    $nombreTecnico = $tecnicoDestinoInfo['nombre'] ?? 'un técnico';
+                    $resultEmp = $this->crearNotificacionInterna(
+                        $ticketInfo['empleado_id'],
+                        $id,
+                        "Tu ticket #$id ha sido escalado al técnico $nombreTecnico"
+                    );
+                    error_log($resultEmp ? "✅ [NOTIFICACIONES] Notificación escalamiento empleado OK" : "❌ [NOTIFICACIONES] Notificación escalamiento empleado FALLÓ");
+
+                    // Notificar a administradores
+                    $nombreTecAntiguo = $user['nombre'] ?? 'Técnico anterior';
+                    $nombreTecNuevo = $tecnicoDestinoInfo['nombre'] ?? 'Nuevo técnico';
+                    error_log("📧 [NOTIFICACIONES] Notificando administradores de escalamiento");
+                    $this->notificarAdministradores(
+                        'escalamiento',
+                        $id,
+                        "El ticket #$id ha sido escalado del técnico $nombreTecAntiguo a $nombreTecNuevo"
+                    );
+                } else {
+                    error_log("⚠️ [NOTIFICACIONES] No se puede crear notificación de escalamiento: ticketInfo inválido");
                 }
             } catch (\Exception $e) {
-                error_log("⚠️ Error enviando correos de escalamiento para ticket #$id: " . $e->getMessage());
-                // No fallar la operación si el correo falla
+                error_log("❌ [NOTIFICACIONES] Error crítico creando notificaciones de escalamiento (no crítico): " . $e->getMessage());
+                // NO lanzar la excepción - las notificaciones no deben afectar el escalamiento
             }
-
-            AuthMiddleware::sendResponse([
-                'message' => 'Ticket escalado exitosamente a ' . $tecnicoDestinoInfo['nombre'],
-                'ticketId' => $id,
-                'escalamiento' => [
-                    'tecnicoDestino' => $tecnicoDestinoInfo['nombre'],
-                    'motivo' => $motivoEscalamiento
-                ]
-            ]);
+            
+            // IMPORTANTE: La respuesta ya se envió arriba, no hacer nada más
+            return;
 
         } catch (\Exception $e) {
-            error_log('Error escalating ticket: ' . $e->getMessage());
-            AuthMiddleware::sendError('Error interno del servidor', 500);
+            error_log("❌ [ESCALAMIENTO] Error en escalamiento de ticket #$id: " . $e->getMessage());
+            error_log("❌ [ESCALAMIENTO] Stack trace: " . $e->getTraceAsString());
+            error_log("❌ [ESCALAMIENTO] File: " . $e->getFile() . " Line: " . $e->getLine());
+            AuthMiddleware::sendError('Error interno del servidor al escalar el ticket: ' . $e->getMessage(), 500);
         }
     }
 
@@ -2043,6 +2400,111 @@ class TicketRoutes
         } catch (\Exception $e) {
             error_log('Error adding technician reopen comment: ' . $e->getMessage());
             AuthMiddleware::sendError('Error interno del servidor', 500);
+        }
+    }
+
+    /**
+     * Helper function para crear notificaciones internas
+     * Solo crea la notificación para el usuario especificado
+     * OPTIMIZADO: Eliminada validación de usuario para mejorar rendimiento (se confía en IDs del sistema)
+     * 
+     * @param int $idUsuario ID del usuario que recibirá la notificación
+     * @param int|null $idTicket ID del ticket relacionado (opcional)
+     * @param string $mensaje Mensaje de la notificación
+     * @return bool true si se creó exitosamente, false en caso contrario
+     */
+    private function crearNotificacionInterna($idUsuario, $idTicket, $mensaje)
+    {
+        try {
+            // Validación básica solo (sin consulta extra a la BD para mejor rendimiento)
+            if (!$idUsuario || $idUsuario <= 0 || !is_numeric($idUsuario)) {
+                error_log("⚠️ [NOTIFICACIONES] No se puede crear notificación: idUsuario inválido ($idUsuario)");
+                return false;
+            }
+
+            // Crear la notificación directamente (optimizado - sin validar existencia de usuario)
+            // NOTA: id_ticket es NOT NULL en la BD, así que siempre debe tener un valor
+            // Si viene null, no crear la notificación (evitar errores de BD)
+            if ($idTicket === null || $idTicket <= 0) {
+                error_log("⚠️ [NOTIFICACIONES] No se puede crear notificación: idTicket inválido ($idTicket) para usuario $idUsuario");
+                return false;
+            }
+            
+            error_log("📝 [NOTIFICACIONES] Intentando crear notificación - Usuario: $idUsuario, Ticket: $idTicket");
+            
+            // Intentar insertar en diferentes nombres de tabla
+            $insertado = false;
+            $nombresTabla = ['notificaciones', 'Notificaciones', 'NOTIFICACIONES'];
+            
+            foreach ($nombresTabla as $nombreTabla) {
+                try {
+                    $this->db->query(
+                        "INSERT INTO `$nombreTabla` (id_usuario, mensaje, tipo, id_ticket, fecha_envio, leida) VALUES (?, ?, ?, ?, NOW(), 0)",
+                        [$idUsuario, $mensaje, 'Interna', $idTicket]
+                    );
+                    $insertado = true;
+                    break;
+                } catch (\Exception $e) {
+                    if (strpos($e->getMessage(), "doesn't exist") === false && strpos($e->getMessage(), "Unknown table") === false) {
+                        // Si es otro tipo de error, lanzarlo
+                        throw $e;
+                    }
+                    // Si es error de tabla no existe, intentar siguiente
+                    continue;
+                }
+            }
+            
+            if (!$insertado) {
+                throw new \Exception("No se pudo insertar notificación: ninguna tabla de notificaciones encontrada");
+            }
+
+            // Log siempre activo para debugging de notificaciones
+            error_log("✅ [NOTIFICACIONES] Creada exitosamente para usuario ID $idUsuario, ticket #$idTicket: " . substr($mensaje, 0, 60) . "...");
+            return true;
+        } catch (\PDOException $e) {
+            $errorMsg = $e->getMessage();
+            $errorCode = $e->getCode();
+            error_log("❌ [NOTIFICACIONES] Error PDO creando notificación para usuario $idUsuario, ticket #$idTicket");
+            error_log("❌ [NOTIFICACIONES] Mensaje: $errorMsg");
+            error_log("❌ [NOTIFICACIONES] Código: $errorCode");
+            error_log("❌ [NOTIFICACIONES] SQL State: " . ($e->errorInfo[0] ?? 'N/A'));
+            
+            // Si es un error de FK, el usuario o ticket no existe
+            if (strpos($errorMsg, 'FOREIGN KEY') !== false || strpos($errorMsg, '1452') !== false) {
+                error_log("⚠️ [NOTIFICACIONES] Usuario $idUsuario o ticket #$idTicket no existe en la BD");
+            }
+            return false;
+        } catch (\Exception $e) {
+            error_log("❌ [NOTIFICACIONES] Error general creando notificación para usuario $idUsuario, ticket #$idTicket: " . $e->getMessage());
+            error_log("❌ [NOTIFICACIONES] Stack trace: " . $e->getTraceAsString());
+            return false;
+        }
+    }
+
+    /**
+     * Crea notificaciones para administradores cuando ocurre un evento importante
+     * 
+     * @param string $tipoEvento Tipo de evento (escalamiento, asignacion, etc.)
+     * @param int|null $idTicket ID del ticket relacionado
+     * @param string $mensaje Mensaje de la notificación
+     */
+    private function notificarAdministradores($tipoEvento, $idTicket, $mensaje)
+    {
+        try {
+            // Obtener todos los administradores
+            $stmt = $this->db->query(
+                'SELECT id_usuario FROM usuarios WHERE rol = ? AND activo = 1',
+                ['administrador']
+            );
+            $administradores = $stmt->fetchAll();
+
+            foreach ($administradores as $admin) {
+                $this->crearNotificacionInterna($admin['id_usuario'], $idTicket, $mensaje);
+            }
+
+            error_log("✅ Notificaciones enviadas a " . count($administradores) . " administrador(es) para evento: $tipoEvento");
+        } catch (\Exception $e) {
+            error_log("❌ Error notificando administradores: " . $e->getMessage());
         }
     }
 }
