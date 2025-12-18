@@ -1919,29 +1919,26 @@ class TicketRoutes
         $offset = ($page - 1) * $limit;
 
         try {
-            // Contar total - SOLO tickets escalados donde el usuario es el técnico de destino
-            // IMPORTANTE: Solo mostrar al técnico destino, no al técnico original
+            // Contar total - SOLO tickets escalados donde el usuario es el técnico asignado
+            // IMPORTANTE: Cuando se escala un ticket, el id_tecnico se actualiza al técnico destino
+            // Por lo tanto, solo necesitamos verificar que t.estatus = "Escalado" y t.id_tecnico = usuario actual
             $stmtCount = $this->db->query(
-                'SELECT COUNT(DISTINCT t.id_ticket) as total
+                'SELECT COUNT(*) as total
                  FROM tickets t
-                 INNER JOIN escalamientos e ON t.id_ticket = e.id_ticket
                  WHERE t.estatus = "Escalado"
-                 AND e.tecnico_nuevo_id = ?
-                 AND e.fecha_escalamiento = (
-                   SELECT MAX(fecha_escalamiento)
-                   FROM escalamientos
-                   WHERE id_ticket = t.id_ticket
-                 )',
+                 AND t.id_tecnico = ?',
                 [$user['id_usuario']]
             );
             $countResult = $stmtCount->fetch();
             $total = (int)$countResult['total'];
 
             // Obtener tickets escalados - SOLO para el técnico destino
-            // IMPORTANTE: Usar solo e.tecnico_nuevo_id para asegurar que solo el técnico destino vea estos tickets
+            // IMPORTANTE: Usar t.id_tecnico porque cuando se escala, el ticket se asigna al técnico destino
+            // También obtenemos información del escalamiento más reciente para mostrar el motivo
             $stmt = $this->db->query(
                 'SELECT t.id_ticket as id, t.descripcion, t.prioridad, t.fecha_creacion,
                         t.estatus, s.categoria, s.subcategoria, s.tiempo_objetivo,
+                        t.fecha_asignacion, t.fecha_inicio_atencion, t.fecha_finalizacion,
                         u.nombre as usuario_nombre, u.correo as usuario_correo,
                         tec.nombre as tecnico_nombre, tec.correo as tecnico_correo,
                         tec_orig.nombre as tecnico_original_nombre,
@@ -1950,16 +1947,16 @@ class TicketRoutes
                  JOIN servicios s ON t.id_servicio = s.id_servicio
                  JOIN usuarios u ON t.id_usuario = u.id_usuario
                  LEFT JOIN usuarios tec ON t.id_tecnico = tec.id_usuario
-                 INNER JOIN escalamientos e ON t.id_ticket = e.id_ticket
+                 LEFT JOIN escalamientos e ON t.id_ticket = e.id_ticket 
+                    AND e.fecha_escalamiento = (
+                        SELECT MAX(fecha_escalamiento)
+                        FROM escalamientos
+                        WHERE id_ticket = t.id_ticket
+                    )
                  LEFT JOIN usuarios tec_orig ON e.tecnico_original_id = tec_orig.id_usuario
                  WHERE t.estatus = "Escalado"
-                 AND e.tecnico_nuevo_id = ?
-                 AND e.fecha_escalamiento = (
-                   SELECT MAX(fecha_escalamiento)
-                   FROM escalamientos
-                   WHERE id_ticket = t.id_ticket
-                 )
-                 ORDER BY e.fecha_escalamiento DESC, t.fecha_creacion DESC
+                 AND t.id_tecnico = ?
+                 ORDER BY t.fecha_asignacion DESC, t.fecha_creacion DESC
                  LIMIT ? OFFSET ?',
                 [$user['id_usuario'], $limit, $offset]
             );
@@ -2336,15 +2333,38 @@ class TicketRoutes
                 AuthMiddleware::sendError('No se puede escalar un ticket que ya está cerrado', 403);
                 return;
             }
+            
+            // Verificar que no se esté escalando al mismo técnico que ya tiene el ticket
+            $ticketTecnicoActual = (int)($ticket['id_tecnico'] ?? 0);
+            if ($ticketTecnicoActual > 0 && $ticketTecnicoActual === (int)$tecnicoDestino) {
+                AuthMiddleware::sendError('El ticket ya está asignado a este técnico. No es necesario escalarlo.', 400);
+                return;
+            }
 
             // Update ticket status and assign to new technician
             // IMPORTANTE: Esta es la operación crítica - si esto funciona, el escalamiento se considera exitoso
             error_log("📧 [ESCALAMIENTO] Actualizando ticket #$id a estado Escalado y asignando a técnico ID: $tecnicoDestino");
-            $this->db->query(
+            $stmtUpdate = $this->db->query(
                 'UPDATE tickets SET estatus = "Escalado", id_tecnico = ?, fecha_asignacion = COALESCE(fecha_asignacion, NOW()) WHERE id_ticket = ?',
                 [$tecnicoDestino, $id]
             );
-            error_log("✅ [ESCALAMIENTO] Ticket #$id actualizado exitosamente - Escalamiento completado");
+            
+            // Verificar que la actualización se realizó correctamente
+            $stmtVerify = $this->db->query(
+                'SELECT id_ticket, estatus, id_tecnico FROM tickets WHERE id_ticket = ?',
+                [$id]
+            );
+            $ticketActualizado = $stmtVerify->fetch();
+            
+            if (!$ticketActualizado || $ticketActualizado['estatus'] !== 'Escalado' || (int)$ticketActualizado['id_tecnico'] !== (int)$tecnicoDestino) {
+                error_log("❌ [ESCALAMIENTO] No se pudo actualizar el ticket #$id correctamente");
+                error_log("   Estado esperado: Escalado, Estado actual: " . ($ticketActualizado['estatus'] ?? 'NULL'));
+                error_log("   Técnico esperado: $tecnicoDestino, Técnico actual: " . ($ticketActualizado['id_tecnico'] ?? 'NULL'));
+                AuthMiddleware::sendError('No se pudo actualizar el ticket. Por favor, intenta nuevamente.', 500);
+                return;
+            }
+            
+            error_log("✅ [ESCALAMIENTO] Ticket #$id actualizado exitosamente - Estado: {$ticketActualizado['estatus']}, Técnico: {$ticketActualizado['id_tecnico']}");
 
             // Marcar que el escalamiento se completó exitosamente
             $escalamientoCompletado = true;
