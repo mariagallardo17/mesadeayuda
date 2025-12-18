@@ -37,9 +37,9 @@ class NotificationService
                 return false;
             }
             
+            // Insertar en la tabla notificaciones (minúscula) con fecha_envio
             $sql = 'INSERT INTO notificaciones (id_usuario, mensaje, tipo, id_ticket, fecha_envio, leida) VALUES (?, ?, ?, ?, NOW(), 0)';
             $params = [$idUsuario, $mensaje, $tipo, $idTicket];
-            
             $this->db->query($sql, $params);
             
             error_log("✅ Notificación creada exitosamente para usuario $idUsuario, ticket $idTicket");

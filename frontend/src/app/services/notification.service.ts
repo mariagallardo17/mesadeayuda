@@ -132,6 +132,8 @@ export class NotificationService {
   private mergeBackendNotifications(backendResponse: any): void {
     // El backend devuelve un array directamente, no un objeto con 'notifications'
     console.log('🔄 [NOTIFICACIONES] Procesando respuesta del backend:', backendResponse);
+    console.log('🔄 [NOTIFICACIONES] Tipo de respuesta:', typeof backendResponse);
+    console.log('🔄 [NOTIFICACIONES] Es array?', Array.isArray(backendResponse));
     
     if (!backendResponse || !Array.isArray(backendResponse)) {
       console.warn('⚠️ [NOTIFICACIONES] Respuesta del backend no válida o no es un array:', backendResponse);
@@ -141,12 +143,17 @@ export class NotificationService {
     
     if (backendResponse.length === 0) {
       console.log('ℹ️ [NOTIFICACIONES] No hay notificaciones en la respuesta del backend');
+      console.log('ℹ️ [NOTIFICACIONES] Esto puede ser normal si el usuario no tiene notificaciones aún');
+    } else {
+      console.log(`✅ [NOTIFICACIONES] Se recibieron ${backendResponse.length} notificaciones del backend`);
+      console.log('📋 [NOTIFICACIONES] Primeras 3 notificaciones:', backendResponse.slice(0, 3));
     }
 
     // Obtener el ID del usuario actual para validar
     const currentUserId = this.getCurrentUserId();
 
-    const backendNotifications = backendResponse.map((n: any) => ({
+    const backendNotifications = backendResponse.map((n: any, index: number) => {
+      const mapped = {
       id: (n.id_notificacion || n.id || '').toString(),
       type: (n.tipo || n.type || 'info') as 'info' | 'success' | 'warning' | 'error',
       title: n.titulo || n.title || this.getTitleFromMessage(n.mensaje || n.message || ''),
@@ -156,16 +163,29 @@ export class NotificationService {
       actionUrl: n.actionUrl,
       ticketId: (n.id_ticket || n.ticketId) ? (n.id_ticket || n.ticketId).toString() : undefined,
       userId: n.id_usuario || n.userId // Agregar userId para validación
-    }));
+      };
+      
+      if (index < 3) {
+        console.log(`📝 [NOTIFICACIONES] Notificación ${index + 1} mapeada:`, {
+          id: mapped.id,
+          userId: mapped.userId,
+          message: mapped.message.substring(0, 50) + '...',
+          read: mapped.read
+        });
+      }
+      
+      return mapped;
+    });
 
     // FILTRAR CRÍTICO: Solo mostrar notificaciones que pertenecen al usuario actual
     // Esto es una doble validación de seguridad además del filtrado del backend
     let notificacionesValidas = backendNotifications;
     
     if (currentUserId) {
+      console.log(`🔍 [NOTIFICACIONES] Filtrando notificaciones para usuario ID: ${currentUserId}`);
       const notificacionesInvalidas: any[] = [];
       notificacionesValidas = backendNotifications.filter((notif: any) => {
-        const notifUserId = notif.userId ? parseInt(notif.userId) : null;
+        const notifUserId = notif.userId ? parseInt(notif.userId.toString()) : null;
         
         // Solo incluir notificaciones que pertenecen al usuario actual
         if (notifUserId === currentUserId) {
@@ -177,19 +197,27 @@ export class NotificationService {
         }
       });
       
+      console.log(`✅ [NOTIFICACIONES] Después del filtro: ${notificacionesValidas.length} notificaciones válidas de ${backendNotifications.length} totales`);
+      
       if (notificacionesInvalidas.length > 0) {
         console.error(`❌ [NOTIFICACIONES] ERROR CRÍTICO: Se filtraron ${notificacionesInvalidas.length} notificaciones que no pertenecen al usuario ${currentUserId}`);
         console.error(`❌ [NOTIFICACIONES] Esto indica un problema grave - las notificaciones se están creando o consultando incorrectamente`);
+        console.error(`❌ [NOTIFICACIONES] Notificaciones filtradas:`, notificacionesInvalidas);
       }
     } else {
       console.warn('⚠️ [NOTIFICACIONES] No se pudo obtener el ID del usuario actual - no se puede validar notificaciones');
+      console.warn('⚠️ [NOTIFICACIONES] Se mostrarán TODAS las notificaciones recibidas (riesgo de seguridad)');
     }
 
     // Ordenar por timestamp (más recientes primero)
     notificacionesValidas.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 
     // Actualizar el subject SOLO con notificaciones válidas del usuario actual
-    this.notificationsSubject.next(notificacionesValidas.slice(0, 50)); // Mantener solo las últimas 50
+    const notificacionesFinales = notificacionesValidas.slice(0, 50); // Mantener solo las últimas 50
+    console.log(`✅ [NOTIFICACIONES] Actualizando subject con ${notificacionesFinales.length} notificaciones`);
+    console.log(`📊 [NOTIFICACIONES] Notificaciones no leídas: ${notificacionesFinales.filter(n => !n.read).length}`);
+    
+    this.notificationsSubject.next(notificacionesFinales);
     this.updateUnreadCount();
     this.saveNotificationsToStorage();
   }

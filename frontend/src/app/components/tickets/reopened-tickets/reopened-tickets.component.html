@@ -142,7 +142,12 @@
 
         <div class="detail-item">
           <label>Datos del usuario:</label>
-          <span>{{ selectedTicket.usuario?.nombre }} ({{ selectedTicket.usuario?.correo }})</span>
+          <span *ngIf="selectedTicket.usuario?.nombre && selectedTicket.usuario?.correo">
+            {{ selectedTicket.usuario?.nombre }} ({{ selectedTicket.usuario?.correo }})
+          </span>
+          <span *ngIf="!selectedTicket.usuario?.nombre || !selectedTicket.usuario?.correo" class="no-data">
+            No disponible
+          </span>
         </div>
 
         <div class="detail-item">

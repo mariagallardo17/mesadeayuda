@@ -1,0 +1,261 @@
+<div class="ticket-summary-container">
+  <!-- Header -->
+  <div class="summary-header">
+    <h1>Resumen de Mis Tickets</h1>
+    <p>Estadísticas y resumen de todos tus tickets</p>
+  </div>
+
+  <!-- Loading State -->
+  <div class="loading-container" *ngIf="isLoading">
+    <div class="loading-spinner">
+      <i class="fas fa-spinner fa-spin"></i>
+      <p>Cargando resumen...</p>
+    </div>
+  </div>
+
+  <!-- Content -->
+  <div class="summary-content" *ngIf="!isLoading">
+    <!-- Estadísticas Generales -->
+    <div class="stats-grid">
+      <div class="stat-card total">
+        <div class="stat-icon">
+          <i class="fas fa-ticket-alt"></i>
+        </div>
+        <div class="stat-info">
+          <h3>{{ stats.total }}</h3>
+          <p>Total de Tickets</p>
+        </div>
+      </div>
+
+      <div class="stat-card pendientes">
+        <div class="stat-icon">
+          <i class="far fa-clock"></i>
+        </div>
+        <div class="stat-info">
+          <h3>{{ stats.pendientes }}</h3>
+          <p>Pendientes</p>
+        </div>
+      </div>
+
+      <div class="stat-card en-proceso">
+        <div class="stat-icon">
+          <i class="fas fa-cog fa-spin"></i>
+        </div>
+        <div class="stat-info">
+          <h3>{{ stats.enProceso }}</h3>
+          <p>En Proceso</p>
+        </div>
+      </div>
+
+      <div class="stat-card finalizados">
+        <div class="stat-icon">
+          <i class="fas fa-clipboard-check"></i>
+        </div>
+        <div class="stat-info">
+          <h3>{{ stats.finalizados }}</h3>
+          <p>Finalizados</p>
+        </div>
+      </div>
+
+      <div class="stat-card escalados">
+        <div class="stat-icon">
+          <i class="fas fa-exclamation-triangle"></i>
+        </div>
+        <div class="stat-info">
+          <h3>{{ stats.escalados }}</h3>
+          <p>Escalados</p>
+        </div>
+      </div>
+
+      <div class="stat-card reabiertos">
+        <div class="stat-icon">
+          <i class="fas fa-undo-alt"></i>
+        </div>
+        <div class="stat-info">
+          <h3>{{ stats.reabiertos }}</h3>
+          <p>Reabiertos</p>
+        </div>
+      </div>
+
+      <div class="stat-card cerrados">
+        <div class="stat-icon">
+          <i class="fas fa-lock"></i>
+        </div>
+        <div class="stat-info">
+          <h3>{{ stats.cerrados }}</h3>
+          <p>Cerrados</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Distribución por Estado -->
+    <div class="chart-section">
+      <h2>Distribución por Estado</h2>
+      <div class="chart-container">
+        <div class="chart-item" *ngFor="let estado of [
+          { nombre: 'Pendientes', valor: stats.pendientes, color: '#f39c12' },
+          { nombre: 'En Proceso', valor: stats.enProceso, color: '#3498db' },
+          { nombre: 'Finalizados', valor: stats.finalizados, color: '#6c5ce7' },
+          { nombre: 'Escalados', valor: stats.escalados, color: '#e74c3c' },
+          { nombre: 'Reabiertos', valor: stats.reabiertos, color: '#9b59b6' },
+          { nombre: 'Cerrados', valor: stats.cerrados, color: '#27ae60' }
+        ]">
+          <div class="chart-bar">
+            <div
+              class="chart-fill"
+              [style.width.%]="getPorcentaje(estado.valor, stats.total)"
+              [style.background-color]="estado.color"
+            ></div>
+          </div>
+          <div class="chart-label">
+            <span class="chart-name">{{ estado.nombre }}</span>
+            <span class="chart-value">{{ estado.valor }} ({{ getPorcentaje(estado.valor, stats.total) }}%)</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Tickets por Estado -->
+    <div class="states-section">
+      <h2>Tickets por Estado</h2>
+      <div class="states-grid">
+        <div class="state-card" *ngFor="let section of getEstadoSections()">
+          <div class="state-card-header" [style.border-color]="section.color">
+            <div class="state-card-title">
+              <span class="state-icon" [style.background]="section.color">
+                <i [class]="section.icon"></i>
+              </span>
+              <div>
+                <h3>{{ section.title }}</h3>
+                <p>{{ section.description }}</p>
+              </div>
+            </div>
+            <span class="state-count" [style.color]="section.color">{{ getTicketsCount(section) }}</span>
+          </div>
+
+          <ng-container *ngIf="getTicketsCount(section) > 0; else emptyState">
+            <div class="state-ticket" *ngFor="let ticket of getTicketsByState(section)">
+              <div class="state-ticket-info">
+                <div class="state-ticket-id">#{{ ticket.id }}</div>
+                <div class="state-ticket-desc">{{ truncateDescription(ticket) }}</div>
+                <div class="state-ticket-meta">
+                  <span><i class="far fa-calendar"></i> {{ ticket.fechaCreacion | date:'dd/MM/yyyy' }}</span>
+                  <span class="state-priority" [style.color]="getPrioridadColor(ticket.prioridad)">
+                    <i class="fas fa-flag"></i> {{ ticket.prioridad }}
+                  </span>
+                </div>
+              </div>
+
+              <div class="state-ticket-actions">
+                <div class="state-ticket-status" [style.color]="ticket.mostrarEstadoReabierto ? '#9b59b6' : getEstadoColor(ticket.estado)">
+                  <i class="fas fa-circle"></i> {{ ticket.mostrarEstadoReabierto ? 'Reabierto' : getEstadoLabel(ticket.estado) }}
+                </div>
+                <button
+                  *ngIf="section.key === 'cerrado' && canReopenTickets"
+                  class="reopen-btn"
+                  (click)="abrirModalReapertura(ticket)">
+                  <i class="fas fa-redo"></i>
+                  <span>Reabrir ticket</span>
+                </button>
+              </div>
+            </div>
+          </ng-container>
+
+          <ng-template #emptyState>
+            <div class="state-empty">No hay tickets en este estado por ahora.</div>
+          </ng-template>
+        </div>
+      </div>
+    </div>
+
+    <!-- Mensaje cuando no hay tickets -->
+    <div class="no-tickets" *ngIf="stats.total === 0">
+      <div class="no-tickets-icon">
+        <i class="fas fa-ticket-alt"></i>
+      </div>
+      <h3>No tienes tickets aún</h3>
+      <p>Cuando crees tu primer ticket, aparecerá aquí el resumen.</p>
+    </div>
+
+    <!-- Controles de paginación -->
+    <div class="pagination-container" *ngIf="totalPages > 1 || totalItems > 0">
+      <div class="pagination-controls">
+        <div class="pagination-info">
+          <span>Mostrando {{ getDisplayedRange() }} de {{ totalItems }} tickets</span>
+        </div>
+        <div class="pagination-buttons">
+          <button
+            class="pagination-btn"
+            [disabled]="!hasPrevPage || isLoading"
+            (click)="goToPage(currentPage - 1)">
+            ← Anterior
+          </button>
+          <div class="page-numbers">
+            <button
+              *ngFor="let page of getPaginationArray()"
+              class="page-number"
+              [class.active]="page === currentPage"
+              (click)="goToPage(page)">
+              {{ page }}
+            </button>
+          </div>
+          <button
+            class="pagination-btn"
+            [disabled]="!hasNextPage || isLoading"
+            (click)="goToPage(currentPage + 1)">
+            Siguiente →
+          </button>
+        </div>
+        <div class="pagination-page-info" *ngIf="totalPages > 1">
+          <span>Página {{ currentPage }} de {{ totalPages }}</span>
+        </div>
+        <div class="items-per-page">
+          <label>Mostrar:</label>
+          <select [value]="itemsPerPage" (change)="onItemsPerPageChange($event)">
+            <option [value]="10">10</option>
+            <option [value]="20">20</option>
+            <option [value]="50">50</option>
+          </select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="reopen-modal-overlay" *ngIf="showReopenModal">
+    <div class="reopen-modal" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <h3>Reabrir ticket #{{ ticketSeleccionado?.id }}</h3>
+        <button type="button" class="close-button" (click)="cerrarModalReapertura()">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+
+      <p class="modal-description">
+        Cuéntanos qué no se resolvió para que el técnico pueda retomarlo.
+      </p>
+
+      <form [formGroup]="reopenForm" (ngSubmit)="enviarReapertura()" class="reopen-form">
+        <label for="observaciones">Observaciones</label>
+        <textarea
+          id="observaciones"
+          formControlName="observaciones"
+          rows="5"
+          placeholder="Describe qué no funcionó o qué falta por resolver"
+        ></textarea>
+
+        <div class="form-errors" *ngIf="reopenForm.get('observaciones')?.invalid && reopenForm.get('observaciones')?.touched">
+          <span *ngIf="reopenForm.get('observaciones')?.errors?.['required']">Por favor detalla qué ocurrió.</span>
+          <span *ngIf="reopenForm.get('observaciones')?.errors?.['minlength']">Incluye al menos 10 caracteres.</span>
+          <span *ngIf="reopenForm.get('observaciones')?.errors?.['maxlength']">Máximo 1000 caracteres.</span>
+        </div>
+
+        <div class="modal-actions">
+          <button type="button" class="secondary" (click)="cerrarModalReapertura()">Cancelar</button>
+          <button type="submit" [disabled]="isSubmittingReopen">
+            {{ isSubmittingReopen ? 'Reabriendo...' : 'Confirmar reapertura' }}
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>

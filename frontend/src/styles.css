@@ -30,3 +30,16 @@ input, textarea, [contenteditable] {
   -ms-user-select: text;
   user-select: text;
 }
+
+/* Prevenir traducción automática del navegador */
+html, body, app-root, * {
+  translate: no;
+  -webkit-translate: no;
+  -moz-translate: no;
+  -ms-translate: no;
+}
+
+/* Prevenir que los navegadores detecten idioma para traducción */
+html {
+  lang: es;
+}

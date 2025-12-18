@@ -123,7 +123,7 @@ export class TicketService {
     );
   }
 
-  getMyTickets(page: number = 1, limit: number = 10): Observable<{tickets: Ticket[], pagination: any}> {
+  getMyTickets(page: number = 1, limit: number = 10, finalizadosSinEvaluar: boolean = false): Observable<{tickets: Ticket[], pagination: any}> {
     // Obtener token de autenticación
     const token = this.authService.getToken();
     let headers = new HttpHeaders();
@@ -136,9 +136,14 @@ export class TicketService {
     let params = new HttpParams()
       .set('page', page.toString())
       .set('limit', limit.toString());
+    
+    // Si se solicita solo finalizados sin evaluar, agregar el parámetro
+    if (finalizadosSinEvaluar) {
+      params = params.set('finalizadosSinEvaluar', 'true');
+    }
 
     console.log('🔑 Token para getMyTickets:', token ? 'SÍ' : 'NO');
-    console.log('📤 URL:', `${this.apiUrl}/my-tickets?page=${page}&limit=${limit}`);
+    console.log('📤 URL:', `${this.apiUrl}/my-tickets?page=${page}&limit=${limit}${finalizadosSinEvaluar ? '&finalizadosSinEvaluar=true' : ''}`);
 
     return this.http.get<{tickets: Ticket[], pagination: any}>(`${this.apiUrl}/my-tickets`, { headers, params });
   }

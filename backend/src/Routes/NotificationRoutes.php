@@ -20,11 +20,92 @@ class NotificationRoutes
     private function registerRoutes()
     {
         $this->router->addRoute('GET', '/notifications', [$this, 'getNotifications']);
+        $this->router->addRoute('GET', '/notifications/debug', [$this, 'getNotificationsDebug']);
         $this->router->addRoute('GET', '/notifications/:userId', [$this, 'getNotificationsByUserId']);
         $this->router->addRoute('POST', '/notifications', [$this, 'createNotification']);
         $this->router->addRoute('POST', '/notifications/status-change', [$this, 'createStatusChangeNotification']);
         $this->router->addRoute('PUT', '/notifications/:id/read', [$this, 'markAsRead']);
         $this->router->addRoute('DELETE', '/notifications/:notificationId', [$this, 'deleteNotification']);
+    }
+    
+    /**
+     * Endpoint de diagnóstico para verificar el estado de las notificaciones
+     * Útil para depuración sin acceso directo a la base de datos
+     */
+    public function getNotificationsDebug()
+    {
+        $user = AuthMiddleware::authenticate();
+        
+        if (!isset($user['id_usuario']) || empty($user['id_usuario'])) {
+            AuthMiddleware::sendError('Error de autenticación: usuario no válido', 401);
+            return;
+        }
+        
+        $userId = (int)$user['id_usuario'];
+        $debugInfo = [
+            'usuario_id' => $userId,
+            'usuario_nombre' => $user['nombre'] ?? 'N/A',
+            'fecha_consulta' => date('Y-m-d H:i:s'),
+            'tabla_encontrada' => false,
+            'tabla_nombre' => null,
+            'total_notificaciones' => 0,
+            'notificaciones_no_leidas' => 0,
+            'ultimas_5_notificaciones' => [],
+            'errores' => []
+        ];
+        
+        try {
+            // Intentar encontrar la tabla
+            $nombresTabla = ['notificaciones', 'Notificaciones', 'NOTIFICACIONES'];
+            
+            foreach ($nombresTabla as $nombreTabla) {
+                try {
+                    // Verificar que la tabla existe
+                    $stmt = $this->db->query("SELECT COUNT(*) as total FROM `$nombreTabla` WHERE id_usuario = ?", [$userId]);
+                    $result = $stmt->fetch();
+                    
+                    if ($result !== false) {
+                        $debugInfo['tabla_encontrada'] = true;
+                        $debugInfo['tabla_nombre'] = $nombreTabla;
+                        $debugInfo['total_notificaciones'] = (int)$result['total'];
+                        
+                        // Contar no leídas
+                        $stmt = $this->db->query(
+                            "SELECT COUNT(*) as total FROM `$nombreTabla` WHERE id_usuario = ? AND leida = 0",
+                            [$userId]
+                        );
+                        $resultNoLeidas = $stmt->fetch();
+                        $debugInfo['notificaciones_no_leidas'] = (int)($resultNoLeidas['total'] ?? 0);
+                        
+                        // Obtener las últimas 5
+                        $stmt = $this->db->query(
+                            "SELECT id_notificacion, id_ticket, mensaje, fecha_envio, leida 
+                             FROM `$nombreTabla` 
+                             WHERE id_usuario = ? 
+                             ORDER BY fecha_envio DESC 
+                             LIMIT 5",
+                            [$userId]
+                        );
+                        $notificaciones = $stmt->fetchAll();
+                        $debugInfo['ultimas_5_notificaciones'] = $notificaciones;
+                        
+                        break;
+                    }
+                } catch (\Exception $e) {
+                    $debugInfo['errores'][] = "Error con tabla $nombreTabla: " . $e->getMessage();
+                    continue;
+                }
+            }
+            
+            if (!$debugInfo['tabla_encontrada']) {
+                $debugInfo['errores'][] = "No se encontró ninguna tabla de notificaciones válida";
+            }
+            
+        } catch (\Exception $e) {
+            $debugInfo['errores'][] = "Error general: " . $e->getMessage();
+        }
+        
+        AuthMiddleware::sendResponse($debugInfo);
     }
     
     public function getNotifications()

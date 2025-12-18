@@ -302,30 +302,18 @@ export class CloseTicketComponent implements OnInit, OnDestroy {
   // Cargar tickets finalizados del usuario
   loadFinalizedTickets(): void {
     this.isSearching = true;
-    this.ticketService.getMyTickets(this.currentPage, this.itemsPerPage).pipe(
+    // Usar el parámetro finalizadosSinEvaluar=true para que el backend filtre correctamente
+    this.ticketService.getMyTickets(this.currentPage, this.itemsPerPage, true).pipe(
       takeUntil(this.destroy$)
     ).subscribe({
       next: (response) => {
-        // Extraer tickets de la respuesta paginada
+        // Extraer tickets de la respuesta paginada (ya vienen filtrados del backend)
         const tickets = response.tickets || [];
-        console.log('Todos los tickets recibidos:', tickets);
-        // Filtrar tickets que pueden ser evaluados:
-        // - Tickets finalizados sin evaluación
-        // - Tickets cerrados por sistema sin evaluación
-        this.tickets = tickets.filter((ticket: any) => {
-          // Verificar que no tenga evaluación
-          if (this.hasEvaluation(ticket)) {
-            return false;
-          }
-          // Verificar cierre automático - puede venir como true, 1, o '1'
-          const evaluacionCierre = ticket.evaluacionCierreAutomatico;
-          const esCierreAutomatico = evaluacionCierre === true ||
-                                     (typeof evaluacionCierre === 'number' && evaluacionCierre === 1) ||
-                                     (typeof evaluacionCierre === 'string' && evaluacionCierre === '1');
-          // Mostrar si está finalizado o cerrado por sistema
-          return ticket.estado === 'Finalizado' ||
-                 (ticket.estado === 'Cerrado' && esCierreAutomatico);
-        }).map((ticket: any) => {
+        console.log('Tickets finalizados sin evaluar recibidos:', tickets);
+        
+        // Ya no es necesario filtrar, el backend ya lo hizo
+        // Solo limpiar la descripción si contiene una fecha al final
+        this.tickets = tickets.map((ticket: any) => {
           // Limpiar la descripción si contiene una fecha al final
           // Patrón: fecha en formato dd/MM/yyyy o dd-MM-yyyy al final de la descripción
           const fechaPattern = /\s*\d{2}[\/\-]\d{2}[\/\-]\d{4}\s*$/;
