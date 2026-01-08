@@ -3,8 +3,7 @@
 namespace App\Services;
 
 class EmailService
-
-
+{
     public function __construct()
     {
         // Helper function to clean environment variables (remove quotes)
