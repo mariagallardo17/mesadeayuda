@@ -90,12 +90,18 @@ export class AssignedTicketsComponent implements OnInit, OnDestroy {
         // Extraer tickets de la respuesta paginada
         const tickets = response.tickets || [];
         // Filtrar solo tickets que están asignados al técnico actual
+        // Excluir tickets cerrados (ya completados) y reaperturas
         const currentUser = this.authService.getCurrentUser();
-        this.tickets = tickets.filter((ticket: any) =>
-          ticket.tecnicoAsignado &&
-          ticket.estado !== 'Cerrado' &&
-          !ticket.reapertura
-        );
+        this.tickets = tickets.filter((ticket: any) => {
+          const estadoLower = (ticket.estado || '').toLowerCase().trim();
+          // Excluir tickets cerrados: "cerrado", "cerr", "cerr.", etc.
+          const esCerrado = estadoLower === 'cerrado' || 
+                           estadoLower.startsWith('cerr') ||
+                           estadoLower === 'cerr';
+          return ticket.tecnicoAsignado &&
+                 !esCerrado &&
+                 !ticket.reapertura;
+        });
         
         // Actualizar información de paginación
         if (response.pagination) {

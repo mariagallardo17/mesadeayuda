@@ -3,6 +3,10 @@
   <div class="catalog-header">
     <h1>Catálogo de Servicios</h1>
     <div class="header-actions">
+      <button class="refresh-button" (click)="loadServices()" [disabled]="isLoading">
+        <i class="fas fa-sync-alt" [class.fa-spin]="isLoading"></i>
+        Actualizar
+      </button>
       <button class="btn btn-primary" (click)="showAddServiceForm()">
         <span class="btn-icon">➕</span>
         Nuevo Servicio

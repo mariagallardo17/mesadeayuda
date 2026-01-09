@@ -88,8 +88,16 @@ export class TicketTrackingComponent implements OnInit, OnDestroy {
         const tickets = response.tickets || [];
         console.log('📋 Tickets recibidos del backend:', tickets.length);
         console.log('📋 Lista completa de tickets:', tickets);
-        const visibles = tickets.filter((ticket: any) => !ticket.reapertura);
-        console.log('✅ Tickets visibles (sin reapertura):', visibles.length);
+        // Filtrar tickets: excluir reaperturas y tickets cerrados (ya completados)
+        const visibles = tickets.filter((ticket: any) => {
+          const estadoLower = (ticket.estado || '').toLowerCase().trim();
+          // Excluir tickets cerrados: "cerrado", "cerr", "cerr.", etc.
+          const esCerrado = estadoLower === 'cerrado' || 
+                           estadoLower.startsWith('cerr') ||
+                           estadoLower === 'cerr';
+          return !ticket.reapertura && !esCerrado;
+        });
+        console.log('✅ Tickets visibles (sin reapertura y sin cerrados):', visibles.length);
         console.log('✅ Lista de tickets visibles:', visibles);
         this.tickets = visibles;
         this.filteredTickets = visibles;

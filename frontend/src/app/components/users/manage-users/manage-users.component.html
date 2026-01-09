@@ -2,6 +2,12 @@
   <!-- Header -->
   <div class="header">
     <h1>Gestión de Usuarios</h1>
+    <div class="header-actions">
+      <button class="refresh-button" (click)="loadUsers()" [disabled]="isLoading">
+        <i class="fas fa-sync-alt" [class.fa-spin]="isLoading"></i>
+        Actualizar
+      </button>
+    </div>
     <div class="user-icon">👥</div>
   </div>
 

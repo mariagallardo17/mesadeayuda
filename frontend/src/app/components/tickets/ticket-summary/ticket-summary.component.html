@@ -1,8 +1,16 @@
 <div class="ticket-summary-container">
   <!-- Header -->
   <div class="summary-header">
-    <h1>Resumen de Mis Tickets</h1>
-    <p>Estadísticas y resumen de todos tus tickets</p>
+    <div class="header-content">
+      <div>
+        <h1>Resumen de Mis Tickets</h1>
+        <p>Estadísticas y resumen de todos tus tickets</p>
+      </div>
+      <button class="refresh-button" (click)="loadTickets()" [disabled]="isLoading">
+        <i class="fas fa-sync-alt" [class.fa-spin]="isLoading"></i>
+        Actualizar
+      </button>
+    </div>
   </div>
 
   <!-- Loading State -->

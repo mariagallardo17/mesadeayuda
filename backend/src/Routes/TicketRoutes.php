@@ -55,8 +55,10 @@ class TicketRoutes
             if ($user['rol'] === 'tecnico' || $user['rol'] === 'administrador') {
                 // OPTIMIZADO: Usar una sola consulta con SQL_CALC_FOUND_ROWS para mejor rendimiento
                 // Para técnicos: mostrar tickets asignados con información del usuario que creó el ticket
+                // EXCLUIR tickets cerrados (ya completados) y escalados
+                // INCLUIR información de evaluaciones y reaperturas
                 $stmt = $this->db->query(
-                    'SELECT
+                    'SELECT SQL_CALC_FOUND_ROWS
                         t.id_ticket as id,
                         s.categoria,
                         s.subcategoria,
@@ -72,15 +74,35 @@ class TicketRoutes
                         t.fecha_cierre,
                         t.tiempo_atencion_segundos,
                         t.tiempo_restante_finalizacion,
+                        t.evaluacion_cierre_automatico,
+                        t.pendiente_motivo as pendienteMotivo,
+                        t.pendiente_tiempo_estimado as pendienteTiempoEstimado,
+                        t.pendiente_actualizado_en as pendienteActualizadoEn,
                         u.id_usuario as usuario_id,
                         u.nombre as usuario_nombre,
                         u.correo as usuario_correo,
                         u.departamento as usuario_departamento,
-                        t.id_tecnico as tecnico_id
+                        t.id_tecnico as tecnico_id,
+                        e.calificacion,
+                        e.comentario as comentario_evaluacion,
+                        e.fecha_evaluacion,
+                        tr.id_reapertura as reapertura_id
                      FROM tickets t
                      JOIN servicios s ON t.id_servicio = s.id_servicio
                      JOIN usuarios u ON t.id_usuario = u.id_usuario
-                     WHERE t.id_tecnico = ? AND t.estatus != "Escalado"
+                     LEFT JOIN evaluaciones e ON t.id_ticket = e.id_ticket
+                     LEFT JOIN (
+                         SELECT tr1.*
+                         FROM ticketreaperturas tr1
+                         INNER JOIN (
+                             SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                             FROM ticketreaperturas
+                             GROUP BY id_ticket
+                         ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                     ) tr ON tr.id_ticket = t.id_ticket
+                     WHERE t.id_tecnico = ? 
+                     AND t.estatus != "Escalado"
+                     AND t.estatus != "Cerrado"
                      ORDER BY t.fecha_creacion DESC
                      LIMIT ? OFFSET ?',
                     [$user['id_usuario'], $limit, $offset]
@@ -93,7 +115,10 @@ class TicketRoutes
                 // Si FOUND_ROWS no funciona, hacer COUNT (fallback)
                 if ($total === 0) {
                     $stmtCount = $this->db->query(
-                        'SELECT COUNT(*) as total FROM tickets t WHERE t.id_tecnico = ? AND t.estatus != "Escalado"',
+                        'SELECT COUNT(*) as total FROM tickets t 
+                         WHERE t.id_tecnico = ? 
+                         AND t.estatus != "Escalado"
+                         AND t.estatus != "Cerrado"',
                         [$user['id_usuario']]
                     );
                     $total = (int)($stmtCount->fetch()['total'] ?? 0);
@@ -102,7 +127,7 @@ class TicketRoutes
                 // OPTIMIZADO: Para empleados también usar una sola consulta
                 // Para empleados: mostrar sus tickets con información del técnico asignado y del usuario que creó el ticket
                 $stmt = $this->db->query(
-                    'SELECT
+                    'SELECT SQL_CALC_FOUND_ROWS
                         t.id_ticket as id,
                         s.categoria,
                         s.subcategoria,
@@ -127,12 +152,31 @@ class TicketRoutes
                         u.id_usuario as tecnico_id_usuario,
                         u.nombre as tecnico_nombre,
                         u.correo as tecnico_correo,
-                        u.departamento as tecnico_departamento
+                        u.departamento as tecnico_departamento,
+                        e.calificacion,
+                        e.comentario as comentario_evaluacion,
+                        e.fecha_evaluacion,
+                        tr.id_reapertura as reapertura_id,
+                        t.evaluacion_cierre_automatico,
+                        t.pendiente_motivo as pendienteMotivo,
+                        t.pendiente_tiempo_estimado as pendienteTiempoEstimado,
+                        t.pendiente_actualizado_en as pendienteActualizadoEn
                      FROM tickets t
                      JOIN servicios s ON t.id_servicio = s.id_servicio
                      JOIN usuarios u_creador ON t.id_usuario = u_creador.id_usuario
                      LEFT JOIN usuarios u ON t.id_tecnico = u.id_usuario
-                     WHERE t.id_usuario = ?
+                     LEFT JOIN evaluaciones e ON t.id_ticket = e.id_ticket
+                     LEFT JOIN (
+                         SELECT tr1.*
+                         FROM ticketreaperturas tr1
+                         INNER JOIN (
+                             SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                             FROM ticketreaperturas
+                             GROUP BY id_ticket
+                         ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                     ) tr ON tr.id_ticket = t.id_ticket
+                     WHERE t.id_usuario = ? 
+                     AND t.estatus != "Cerrado"
                      ORDER BY t.fecha_creacion DESC
                      LIMIT ? OFFSET ?',
                     [$user['id_usuario'], $limit, $offset]
@@ -145,7 +189,7 @@ class TicketRoutes
                 // Si FOUND_ROWS no funciona, hacer COUNT (fallback)
                 if ($total === 0) {
                     $stmtCount = $this->db->query(
-                        'SELECT COUNT(*) as total FROM tickets t WHERE t.id_usuario = ?',
+                        'SELECT COUNT(*) as total FROM tickets t WHERE t.id_usuario = ? AND t.estatus != "Cerrado"',
                         [$user['id_usuario']]
                     );
                     $total = (int)($stmtCount->fetch()['total'] ?? 0);
@@ -218,6 +262,31 @@ class TicketRoutes
                     if (empty($formattedTicket['estado'])) {
                         $formattedTicket['estado'] = 'Pendiente';
                     }
+
+                    // Agregar información de evaluación si existe
+                    if (!empty($ticket['calificacion'])) {
+                        $formattedTicket['evaluacion'] = [
+                            'calificacion' => (int)$ticket['calificacion'],
+                            'comentario' => $ticket['comentario_evaluacion'] ?? null,
+                            'fechaEvaluacion' => $ticket['fecha_evaluacion'] ?? null
+                        ];
+                    } else {
+                        $formattedTicket['evaluacion'] = null;
+                    }
+
+                    // Agregar información de reapertura si existe
+                    if (!empty($ticket['reapertura_id'])) {
+                        $formattedTicket['reapertura'] = [
+                            'id' => (int)$ticket['reapertura_id']
+                        ];
+                        $formattedTicket['mostrarEstadoReabierto'] = true;
+                    } else {
+                        $formattedTicket['reapertura'] = null;
+                        $formattedTicket['mostrarEstadoReabierto'] = false;
+                    }
+
+                    // Agregar información de evaluación de cierre automático
+                    $formattedTicket['evaluacionCierreAutomatico'] = !empty($ticket['evaluacion_cierre_automatico']) && $ticket['evaluacion_cierre_automatico'] == 1;
 
                     // Formatear tiempo de atención para mejor legibilidad
                     if (!empty($ticket['tiempo_atencion_segundos'])) {

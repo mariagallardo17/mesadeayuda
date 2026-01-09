@@ -134,13 +134,27 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
         // Verificar si la respuesta tiene el nuevo formato con paginación
         if (response && response.tickets && response.pagination) {
           // Filtrar tickets: excluir reaperturas y tickets cerrados (ya completados)
+          // PERO permitir tickets "Finalizados" para que los empleados puedan evaluarlos
           this.tickets = response.tickets.filter(ticket => {
             const estadoLower = (ticket.estado || '').toLowerCase().trim();
-            // Excluir tickets cerrados: "cerrado", "cerr", "cerr.", etc.
+            // Excluir reaperturas
+            if (ticket.reapertura) {
+              return false;
+            }
+            // Excluir tickets cerrados (estado "Cerrado" o variantes como "CERR")
+            // PERO permitir tickets "Finalizados" (que los empleados necesitan ver para evaluar)
             const esCerrado = estadoLower === 'cerrado' || 
-                             estadoLower.startsWith('cerr') ||
-                             estadoLower === 'cerr';
-            return !ticket.reapertura && !esCerrado;
+                             estadoLower === 'cerr' ||
+                             (estadoLower.startsWith('cerr') && !estadoLower.includes('finalizado'));
+            const esFinalizado = estadoLower === 'finalizado';
+            
+            // Permitir tickets finalizados (para que los empleados puedan evaluarlos)
+            if (esFinalizado) {
+              return true;
+            }
+            
+            // Excluir tickets cerrados
+            return !esCerrado;
           });
           this.totalItems = response.pagination.total;
           this.totalPages = response.pagination.totalPages;
@@ -151,13 +165,39 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
         } else if (Array.isArray(response)) {
           // Compatibilidad con formato antiguo (sin paginación)
           // Filtrar tickets: excluir reaperturas y tickets cerrados
+          // PERO permitir tickets "Finalizados" para que los empleados puedan evaluarlos
           this.tickets = response.filter(ticket => {
-            const estadoLower = (ticket.estado || '').toLowerCase().trim();
-            // Excluir tickets cerrados: "cerrado", "cerr", "cerr.", etc.
+            // Excluir reaperturas
+            if (ticket.reapertura) {
+              return false;
+            }
+            
+            // Obtener el estado y normalizarlo
+            const estado = ticket.estado || '';
+            const estadoLower = estado.toLowerCase().trim();
+            
+            // Excluir tickets cerrados (todas las variantes posibles)
             const esCerrado = estadoLower === 'cerrado' || 
-                             estadoLower.startsWith('cerr') ||
-                             estadoLower === 'cerr';
-            return !ticket.reapertura && !esCerrado;
+                             estadoLower === 'cerr' ||
+                             estadoLower.includes('cerrad') ||
+                             (estadoLower.startsWith('cerr') && estadoLower.length <= 6);
+            
+            // Permitir tickets finalizados (para que los empleados puedan evaluarlos)
+            const esFinalizado = estadoLower === 'finalizado' || estadoLower.includes('finalizad');
+            
+            // Si está cerrado, excluirlo (excepto si es finalizado que necesita evaluación)
+            if (esCerrado && !esFinalizado) {
+              console.log(`🚫 Filtrando ticket #${ticket.id} - Estado: "${estado}" (Cerrado)`);
+              return false;
+            }
+            
+            // Permitir tickets finalizados
+            if (esFinalizado) {
+              return true;
+            }
+            
+            // Permitir todos los demás estados (Pendiente, En Progreso, Escalado, etc.)
+            return true;
           });
           this.totalItems = this.tickets.length;
           this.totalPages = 1;
@@ -172,9 +212,11 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
           return;
         }
 
+        // Aplicar filtros y actualizar lista filtrada
         this.applyFilters();
         this.isLoading = false;
         console.log('✅ Tickets procesados:', this.tickets.length, 'de', this.totalItems);
+        console.log('✅ Tickets filtrados visibles:', this.filteredTickets.length);
       },
       error: (error) => {
         console.error('❌ Error cargando tickets:', error);
@@ -226,12 +268,26 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
     let filtered = [...this.tickets];
 
     // Asegurar que nunca se muestren tickets cerrados, incluso si se selecciona en el filtro
+    // PERO permitir tickets "Finalizados" (que los empleados necesitan para evaluar)
     filtered = filtered.filter(ticket => {
-      const estadoLower = (ticket.estado || '').toLowerCase().trim();
+      const estado = ticket.estado || '';
+      const estadoLower = estado.toLowerCase().trim();
+      
+      // Detectar tickets cerrados (todas las variantes)
       const esCerrado = estadoLower === 'cerrado' || 
-                       estadoLower.startsWith('cerr') ||
-                       estadoLower === 'cerr';
-      return !esCerrado;
+                       estadoLower === 'cerr' ||
+                       estadoLower.includes('cerrad') ||
+                       (estadoLower.startsWith('cerr') && estadoLower.length <= 6);
+      
+      // Permitir tickets finalizados
+      const esFinalizado = estadoLower === 'finalizado' || estadoLower.includes('finalizad');
+      
+      // Excluir tickets cerrados (pero permitir finalizados)
+      if (esCerrado && !esFinalizado) {
+        return false;
+      }
+      
+      return true;
     });
 
     if (this.selectedEstado !== 'todos') {
@@ -276,6 +332,7 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
     });
 
     this.filteredTickets = filtered;
+    console.log(`🔍 Filtros aplicados: ${filtered.length} tickets visibles de ${this.tickets.length} totales`);
   }
 
   // Verificar si un ticket es urgente (Crítica o Alta)
@@ -774,37 +831,47 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
     if (this.evaluationForm.valid && this.selectedTicket) {
       this.isLoading = true;
       const { calificacion, comentario } = this.evaluationForm.value;
+      const ticketId = this.selectedTicket.id;
 
       this.ticketService.closeTicketWithEvaluation({
-        ticketId: this.selectedTicket.id,
+        ticketId: ticketId,
         rating: calificacion,
         comentarios: comentario
       }).pipe(
         takeUntil(this.destroy$)
       ).subscribe({
         next: (response) => {
-          console.log('Ticket evaluado y cerrado:', response);
+          console.log('✅ Ticket evaluado y cerrado:', response);
           this.isLoading = false;
-          alert('Ticket evaluado y cerrado exitosamente');
-
-          // Actualizar el ticket local
-          if (this.selectedTicket) {
-            this.selectedTicket.estado = 'Cerrado';
-            this.selectedTicket.evaluacion = {
-              calificacion: calificacion,
-              comentario: comentario,
-              fechaEvaluacion: new Date().toISOString()
-            };
-          }
-
-          // Recargar tickets para obtener la información actualizada
-          this.loadTickets();
+          
+          // Cerrar el modal de detalles inmediatamente
+          this.cerrarDetalles();
+          
+          // Remover el ticket de la lista localmente ANTES de recargar
+          this.tickets = this.tickets.filter(t => t.id !== ticketId);
+          this.filteredTickets = this.filteredTickets.filter(t => t.id !== ticketId);
+          
+          // Aplicar filtros para actualizar la vista
+          this.applyFilters();
+          
+          // Recargar tickets desde el servidor para asegurar datos actualizados
+          // Esperar un poco para que el backend actualice el estado
+          setTimeout(() => {
+            this.loadTickets();
+          }, 1000);
+          
+          // Mostrar mensaje de éxito
+          this.successMessage = 'Ticket evaluado y cerrado exitosamente. Se ha removido de tu lista.';
+          this.showSuccessModal = true;
         },
         error: (error) => {
-          console.error('Error evaluando ticket:', error);
+          console.error('❌ Error evaluando ticket:', error);
           this.isLoading = false;
           const mensajeError = error.error?.error || 'Error al evaluar el ticket';
           alert(mensajeError);
+          
+          // Recargar tickets en caso de error para sincronizar
+          this.loadTickets();
         }
       });
     } else {

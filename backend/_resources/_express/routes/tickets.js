@@ -850,7 +850,9 @@ router.get('/my-tickets', authenticateToken, async (req, res) => {
             GROUP BY id_ticket
           ) latest ON latest.id_ticket = tr.id_ticket AND latest.max_fecha = tr.fecha_reapertura
         ) tr ON tr.id_ticket = t.id_ticket
-        WHERE (t.id_tecnico = ? OR t.id_usuario = ?) AND t.estatus != 'Escalado'
+        WHERE (t.id_tecnico = ? OR t.id_usuario = ?) 
+        AND t.estatus != 'Escalado'
+        AND t.estatus != 'Cerrado'
         ORDER BY t.fecha_creacion DESC
       `, [req.user.id_usuario, req.user.id_usuario]);
     } else {
@@ -906,14 +908,28 @@ router.get('/my-tickets', authenticateToken, async (req, res) => {
           ) latest ON latest.id_ticket = tr.id_ticket AND latest.max_fecha = tr.fecha_reapertura
         ) tr ON tr.id_ticket = t.id_ticket
         WHERE t.id_usuario = ?
+        AND t.estatus != 'Cerrado'
         ORDER BY t.fecha_creacion DESC
       `, [req.user.id_usuario]);
     }
 
     console.log('📊 Tickets encontrados:', tickets.length);
-    console.log('📋 Tickets:', tickets);
 
-    const formattedTickets = tickets.map(ticket => {
+    // Obtener parámetros de paginación
+    const page = parseInt(req.query.page) || 1;
+    const limit = Math.min(Math.max(parseInt(req.query.limit) || 10, 1), 100); // Entre 1 y 100
+    const offset = (page - 1) * limit;
+
+    // Calcular información de paginación
+    const total = tickets.length;
+    const totalPages = Math.ceil(total / limit);
+    const startItem = total > 0 ? offset + 1 : 0;
+    const endItem = Math.min(offset + limit, total);
+
+    // Aplicar paginación a los tickets (slice)
+    const paginatedTickets = tickets.slice(offset, offset + limit);
+
+    const formattedTickets = paginatedTickets.map(ticket => {
       // Calcular enTiempo si no viene del SQL (fallback)
       const enTiempo = ticket.en_tiempo !== null && ticket.en_tiempo !== undefined 
         ? ticket.en_tiempo === 1 
@@ -969,7 +985,20 @@ router.get('/my-tickets', authenticateToken, async (req, res) => {
       };
     });
 
-    res.json(formattedTickets);
+    // Devolver respuesta con paginación (formato consistente con PHP)
+    res.json({
+      tickets: formattedTickets,
+      pagination: {
+        total: total,
+        page: page,
+        limit: limit,
+        totalPages: totalPages,
+        startItem: startItem,
+        endItem: endItem,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1
+      }
+    });
 
     } catch (error) {
       console.error('Error obteniendo tickets:', error);
