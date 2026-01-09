@@ -133,7 +133,15 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
 
         // Verificar si la respuesta tiene el nuevo formato con paginación
         if (response && response.tickets && response.pagination) {
-          this.tickets = response.tickets.filter(ticket => !ticket.reapertura);
+          // Filtrar tickets: excluir reaperturas y tickets cerrados (ya completados)
+          this.tickets = response.tickets.filter(ticket => {
+            const estadoLower = (ticket.estado || '').toLowerCase().trim();
+            // Excluir tickets cerrados: "cerrado", "cerr", "cerr.", etc.
+            const esCerrado = estadoLower === 'cerrado' || 
+                             estadoLower.startsWith('cerr') ||
+                             estadoLower === 'cerr';
+            return !ticket.reapertura && !esCerrado;
+          });
           this.totalItems = response.pagination.total;
           this.totalPages = response.pagination.totalPages;
           this.startItem = response.pagination.startItem;
@@ -142,7 +150,15 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
           this.hasPrevPage = response.pagination.hasPrevPage;
         } else if (Array.isArray(response)) {
           // Compatibilidad con formato antiguo (sin paginación)
-          this.tickets = response.filter(ticket => !ticket.reapertura);
+          // Filtrar tickets: excluir reaperturas y tickets cerrados
+          this.tickets = response.filter(ticket => {
+            const estadoLower = (ticket.estado || '').toLowerCase().trim();
+            // Excluir tickets cerrados: "cerrado", "cerr", "cerr.", etc.
+            const esCerrado = estadoLower === 'cerrado' || 
+                             estadoLower.startsWith('cerr') ||
+                             estadoLower === 'cerr';
+            return !ticket.reapertura && !esCerrado;
+          });
           this.totalItems = this.tickets.length;
           this.totalPages = 1;
           this.startItem = this.tickets.length > 0 ? 1 : 0;
@@ -208,6 +224,15 @@ export class MyTicketsComponent implements OnInit, OnDestroy {
 
   applyFilters(): void {
     let filtered = [...this.tickets];
+
+    // Asegurar que nunca se muestren tickets cerrados, incluso si se selecciona en el filtro
+    filtered = filtered.filter(ticket => {
+      const estadoLower = (ticket.estado || '').toLowerCase().trim();
+      const esCerrado = estadoLower === 'cerrado' || 
+                       estadoLower.startsWith('cerr') ||
+                       estadoLower === 'cerr';
+      return !esCerrado;
+    });
 
     if (this.selectedEstado !== 'todos') {
       filtered = filtered.filter(ticket => ticket.estado === this.selectedEstado);
