@@ -111,10 +111,29 @@ router.post('/', async (req, res) => {
 });
 
 // Marcar notificación como leída
-router.put('/:notificationId/read', async (req, res) => {
+router.put('/:notificationId/read', authenticateToken, async (req, res) => {
   try {
     const { notificationId } = req.params;
-    console.log('✅ Marcando notificación como leída:', notificationId);
+    const userId = req.user.id_usuario;
+    
+    console.log(`✅ [NOTIFICACIONES] Usuario ${userId} marcando notificación ${notificationId} como leída`);
+
+    // CRÍTICO: Validar que la notificación pertenezca al usuario
+    const notification = await query(`
+      SELECT id_notificacion, id_usuario
+      FROM Notificaciones
+      WHERE id_notificacion = ?
+    `, [notificationId]);
+
+    if (notification.length === 0) {
+      console.log(`⚠️ [NOTIFICACIONES] Notificación ${notificationId} no encontrada`);
+      return res.status(404).json({ error: 'Notificación no encontrada' });
+    }
+
+    if (notification[0].id_usuario !== userId) {
+      console.log(`🚫 [NOTIFICACIONES] BLOQUEADO: Usuario ${userId} intentó marcar notificación ${notificationId} que pertenece a usuario ${notification[0].id_usuario}`);
+      return res.status(403).json({ error: 'No tienes permisos para marcar esta notificación como leída' });
+    }
 
     // Verificar si la columna 'leida' existe
     const columnCheck = await query(`
@@ -130,9 +149,9 @@ router.put('/:notificationId/read', async (req, res) => {
       await query(`
         UPDATE Notificaciones
         SET leida = true
-        WHERE id_notificacion = ?
-      `, [notificationId]);
-      console.log('✅ Notificación marcada como leída');
+        WHERE id_notificacion = ? AND id_usuario = ?
+      `, [notificationId, userId]);
+      console.log(`✅ [NOTIFICACIONES] Notificación ${notificationId} marcada como leída por usuario ${userId}`);
     } else {
       // Si no existe, crear la columna primero
       await query(`
@@ -143,33 +162,52 @@ router.put('/:notificationId/read', async (req, res) => {
       await query(`
         UPDATE Notificaciones
         SET leida = true
-        WHERE id_notificacion = ?
-      `, [notificationId]);
-      console.log('✅ Columna leida creada y notificación marcada como leída');
+        WHERE id_notificacion = ? AND id_usuario = ?
+      `, [notificationId, userId]);
+      console.log(`✅ [NOTIFICACIONES] Columna leida creada y notificación ${notificationId} marcada como leída por usuario ${userId}`);
     }
 
     res.json({ success: true });
   } catch (error) {
-    console.error('❌ Error marcando notificación como leída:', error);
+    console.error('❌ [NOTIFICACIONES] Error marcando notificación como leída:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });
 
 // Eliminar notificación
-router.delete('/:notificationId', async (req, res) => {
+router.delete('/:notificationId', authenticateToken, async (req, res) => {
   try {
     const { notificationId } = req.params;
-    console.log('🗑️ Eliminando notificación:', notificationId);
+    const userId = req.user.id_usuario;
+    
+    console.log(`🗑️ [NOTIFICACIONES] Usuario ${userId} intentando eliminar notificación ${notificationId}`);
 
-    await query(`
-      DELETE FROM Notificaciones
+    // CRÍTICO: Validar que la notificación pertenezca al usuario antes de eliminar
+    const notification = await query(`
+      SELECT id_notificacion, id_usuario
+      FROM Notificaciones
       WHERE id_notificacion = ?
     `, [notificationId]);
 
-    console.log('✅ Notificación eliminada');
+    if (notification.length === 0) {
+      console.log(`⚠️ [NOTIFICACIONES] Notificación ${notificationId} no encontrada`);
+      return res.status(404).json({ error: 'Notificación no encontrada' });
+    }
+
+    if (notification[0].id_usuario !== userId) {
+      console.log(`🚫 [NOTIFICACIONES] BLOQUEADO: Usuario ${userId} intentó eliminar notificación ${notificationId} que pertenece a usuario ${notification[0].id_usuario}`);
+      return res.status(403).json({ error: 'No tienes permisos para eliminar esta notificación' });
+    }
+
+    await query(`
+      DELETE FROM Notificaciones
+      WHERE id_notificacion = ? AND id_usuario = ?
+    `, [notificationId, userId]);
+
+    console.log(`✅ [NOTIFICACIONES] Notificación ${notificationId} eliminada por usuario ${userId}`);
     res.json({ success: true });
   } catch (error) {
-    console.error('❌ Error eliminando notificación:', error);
+    console.error('❌ [NOTIFICACIONES] Error eliminando notificación:', error);
     res.status(500).json({ error: 'Error interno del servidor' });
   }
 });

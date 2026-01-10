@@ -539,19 +539,29 @@ class EmailService {
         cc: mailOptions.cc || 'N/A'
       });
 
+      console.log('📧 [CORREOS] Enviando correo a:', mailOptions.to);
+      console.log('📧 [CORREOS] Asunto:', mailOptions.subject);
+      console.log('📧 [CORREOS] Remitente:', mailOptions.from);
+      
       const result = await this.transporter.sendMail(mailOptions);
-      console.log('✅ Correo enviado exitosamente:', result.messageId);
-      console.log('📧 Respuesta del servidor SMTP:', result.response);
+      console.log('✅ [CORREOS] Correo enviado exitosamente a:', mailOptions.to);
+      console.log('✅ [CORREOS] Message ID:', result.messageId);
+      console.log('📧 [CORREOS] Respuesta del servidor SMTP:', result.response);
       return result;
     } catch (error) {
-      console.error('❌ Error enviando correo:', error);
-      console.error('❌ Código de error:', error.code);
-      console.error('❌ Mensaje:', error.message);
+      console.error('❌ [CORREOS] Error enviando correo a:', mailOptions.to);
+      console.error('❌ [CORREOS] Código de error:', error.code);
+      console.error('❌ [CORREOS] Mensaje:', error.message);
+      console.error('❌ [CORREOS] Stack:', error.stack);
       if (error.response) {
-        console.error('❌ Respuesta del servidor:', error.response);
+        console.error('❌ [CORREOS] Respuesta del servidor:', error.response);
       }
       if (error.command) {
-        console.error('❌ Comando fallido:', error.command);
+        console.error('❌ [CORREOS] Comando fallido:', error.command);
+      }
+      // Verificar configuración SMTP
+      if (error.code === 'EAUTH' || error.code === 'EENVELOPE') {
+        console.error('❌ [CORREOS] ERROR DE AUTENTICACIÓN SMTP - Verificar SMTP_USER y SMTP_PASS en .env');
       }
       throw error;
     }

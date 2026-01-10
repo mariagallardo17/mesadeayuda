@@ -1,6 +1,6 @@
 import { Injectable } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
-import { BehaviorSubject, Observable, interval } from 'rxjs';
+import { BehaviorSubject, Observable, interval, firstValueFrom, of } from 'rxjs';
 import { switchMap, tap, catchError } from 'rxjs/operators';
 import { ApiConfig } from '../config/api.config';
 
@@ -24,6 +24,9 @@ export class NotificationService {
 
   private unreadCountSubject = new BehaviorSubject<number>(0);
   public unreadCount$ = this.unreadCountSubject.asObservable();
+  
+  // CRÍTICO: Registrar IDs de notificaciones eliminadas para evitar que reaparezcan durante el polling
+  private deletedNotificationIds = new Set<string>();
 
   private get apiUrl(): string {
     return `${ApiConfig.API_BASE_URL}/notifications`;
@@ -153,6 +156,10 @@ export class NotificationService {
     const currentUserId = this.getCurrentUserId();
 
     const backendNotifications = backendResponse.map((n: any, index: number) => {
+      // CRÍTICO: Asegurar que userId se mapee correctamente desde id_usuario
+      const userIdFromBackend = n.id_usuario !== undefined ? parseInt(n.id_usuario.toString()) : 
+                                (n.userId !== undefined ? parseInt(n.userId.toString()) : null);
+      
       const mapped = {
       id: (n.id_notificacion || n.id || '').toString(),
       type: (n.tipo || n.type || 'info') as 'info' | 'success' | 'warning' | 'error',
@@ -162,7 +169,7 @@ export class NotificationService {
       read: (n.leida !== undefined ? n.leida : (n.read || false)) === 1 || (n.read === true),
       actionUrl: n.actionUrl,
       ticketId: (n.id_ticket || n.ticketId) ? (n.id_ticket || n.ticketId).toString() : undefined,
-      userId: n.id_usuario || n.userId // Agregar userId para validación
+      userId: userIdFromBackend // Mapeo consistente desde id_usuario
       };
       
       if (index < 3) {
@@ -185,10 +192,19 @@ export class NotificationService {
       console.log(`🔍 [NOTIFICACIONES] Filtrando notificaciones para usuario ID: ${currentUserId}`);
       const notificacionesInvalidas: any[] = [];
       notificacionesValidas = backendNotifications.filter((notif: any) => {
-        const notifUserId = notif.userId ? parseInt(notif.userId.toString()) : null;
+        // CRÍTICO 1: Verificar si la notificación fue eliminada por el usuario
+        if (this.deletedNotificationIds.has(notif.id)) {
+          console.log(`🚫 [NOTIFICACIONES] FILTRADA (eliminada): Notificación ID ${notif.id} fue eliminada por el usuario y no se mostrará`);
+          return false;
+        }
+        
+        // CRÍTICO 2: Asegurar que el userId sea un número para comparación correcta
+        const notifUserId = notif.userId !== null && notif.userId !== undefined 
+          ? (typeof notif.userId === 'number' ? notif.userId : parseInt(notif.userId.toString()))
+          : null;
         
         // Solo incluir notificaciones que pertenecen al usuario actual
-        if (notifUserId === currentUserId) {
+        if (notifUserId !== null && notifUserId === currentUserId) {
           return true;
         } else {
           notificacionesInvalidas.push(notif);
@@ -326,6 +342,13 @@ export class NotificationService {
   removeNotification(notificationId: string): void {
     // Eliminar localmente primero
     const currentNotifications = this.notificationsSubject.value;
+    const notificationToDelete = currentNotifications.find(n => n.id === notificationId);
+    
+    if (!notificationToDelete) {
+      console.warn(`⚠️ [NOTIFICACIONES] Notificación ${notificationId} no encontrada localmente`);
+      return;
+    }
+    
     const updatedNotifications = currentNotifications.filter(
       notification => notification.id !== notificationId
     );
@@ -338,13 +361,34 @@ export class NotificationService {
     this.http.delete(`${this.apiUrl}/${notificationId}`)
       .pipe(
         catchError(error => {
-          console.error('Error eliminando notificación en el backend:', error);
+          console.error('❌ [NOTIFICACIONES] Error eliminando notificación en el backend:', error);
+          console.error('❌ [NOTIFICACIONES] Status:', error?.status);
+          console.error('❌ [NOTIFICACIONES] Error completo:', error);
+          
+          // Si falla, restaurar la notificación localmente
+          this.notificationsSubject.next(currentNotifications);
+          this.updateUnreadCount();
+          this.saveNotificationsToStorage();
+          
           return [];
         })
       )
       .subscribe({
-        next: () => {
-          console.log('✅ Notificación eliminada en el backend:', notificationId);
+        next: (response) => {
+          console.log('✅ [NOTIFICACIONES] Notificación eliminada en el backend:', notificationId);
+          // CRÍTICO: Registrar esta notificación como eliminada para evitar que reaparezca durante el polling
+          this.deletedNotificationIds.add(notificationId);
+          // Limpiar el registro después de 1 minuto (por si el usuario recarga la página)
+          setTimeout(() => {
+            this.deletedNotificationIds.delete(notificationId);
+          }, 60000);
+        },
+        error: (error) => {
+          console.error('❌ [NOTIFICACIONES] Error en subscribe al eliminar:', error);
+          // Si falla, restaurar la notificación
+          this.notificationsSubject.next(currentNotifications);
+          this.updateUnreadCount();
+          this.saveNotificationsToStorage();
         }
       });
   }
@@ -353,9 +397,67 @@ export class NotificationService {
    * Elimina todas las notificaciones
    */
   clearAllNotifications(): void {
+    const currentNotifications = this.notificationsSubject.value;
+    
+    if (currentNotifications.length === 0) {
+      console.log('ℹ️ [NOTIFICACIONES] No hay notificaciones para eliminar');
+      return;
+    }
+    
+    console.log(`🗑️ [NOTIFICACIONES] Eliminando ${currentNotifications.length} notificaciones...`);
+    
+    // Limpiar localmente primero para feedback inmediato
     this.notificationsSubject.next([]);
     this.updateUnreadCount();
     this.saveNotificationsToStorage();
+    
+    // CRÍTICO: Registrar todas las notificaciones como eliminadas ANTES de eliminarlas del backend
+    // Esto previene que reaparezcan durante el polling
+    currentNotifications.forEach(notification => {
+      this.deletedNotificationIds.add(notification.id);
+    });
+    
+    // Eliminar todas las notificaciones del backend
+    const deletePromises = currentNotifications.map(notification => {
+      return firstValueFrom(
+        this.http.delete(`${this.apiUrl}/${notification.id}`).pipe(
+          catchError(error => {
+            console.error(`❌ [NOTIFICACIONES] Error eliminando notificación ${notification.id}:`, error);
+            // Si falla eliminar una, removerla del registro de eliminadas para que pueda reintentarse
+            this.deletedNotificationIds.delete(notification.id);
+            // Devolver un Observable que emite null para que firstValueFrom pueda completar
+            return of(null);
+          })
+        )
+      ).catch(error => {
+        console.error(`❌ [NOTIFICACIONES] Error en firstValueFrom para notificación ${notification.id}:`, error);
+        this.deletedNotificationIds.delete(notification.id);
+        return null;
+      });
+    });
+    
+    // Ejecutar todas las eliminaciones en paralelo
+    Promise.all(deletePromises)
+      .then(() => {
+        console.log(`✅ [NOTIFICACIONES] ${currentNotifications.length} notificaciones eliminadas del backend`);
+        // Limpiar el registro después de 2 minutos (por si el usuario recarga la página)
+        setTimeout(() => {
+          currentNotifications.forEach(notification => {
+            this.deletedNotificationIds.delete(notification.id);
+          });
+        }, 120000);
+        // NO recargar inmediatamente - el polling normal se encargará de sincronizar
+      })
+      .catch(error => {
+        console.error('❌ [NOTIFICACIONES] Error al eliminar notificaciones del backend:', error);
+        // Si falla, restaurar las notificaciones localmente y limpiar el registro
+        currentNotifications.forEach(notification => {
+          this.deletedNotificationIds.delete(notification.id);
+        });
+        this.notificationsSubject.next(currentNotifications);
+        this.updateUnreadCount();
+        this.saveNotificationsToStorage();
+      });
   }
 
   /**

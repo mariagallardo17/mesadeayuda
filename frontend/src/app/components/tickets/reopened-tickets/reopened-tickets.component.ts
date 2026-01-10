@@ -369,8 +369,25 @@ export class ReopenedTicketsComponent implements OnInit, OnDestroy {
       },
       error: (error) => {
         this.isSavingCause = false;
-        console.error('Error guardando causa de reapertura:', error);
-        alert(error.error?.error || 'No fue posible guardar la causa. Intenta nuevamente.');
+        console.error('❌ Error guardando causa de reapertura:', error);
+        console.error('❌ Status:', error?.status);
+        console.error('❌ Error completo:', error);
+        
+        let errorMessage = 'No fue posible guardar la causa. Intenta nuevamente.';
+        
+        if (error?.error?.error) {
+          errorMessage = error.error.error;
+        } else if (error?.message) {
+          errorMessage = error.message;
+        } else if (error?.status === 500) {
+          errorMessage = 'Error interno del servidor. Verifica los logs del servidor para más detalles.';
+        } else if (error?.status === 404) {
+          errorMessage = 'No se encontró información de reapertura para este ticket.';
+        } else if (error?.status === 403) {
+          errorMessage = 'No tienes permisos para registrar la causa de este ticket.';
+        }
+        
+        alert(errorMessage);
       }
     });
   }

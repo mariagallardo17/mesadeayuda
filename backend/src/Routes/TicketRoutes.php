@@ -109,19 +109,31 @@ class TicketRoutes
                 );
 
                 // Obtener total usando FOUND_ROWS (más rápido que COUNT separado)
-                $stmtTotal = $this->db->query('SELECT FOUND_ROWS() as total');
-                $total = (int)($stmtTotal->fetch()['total'] ?? 0);
+                // Nota: SQL_CALC_FOUND_ROWS está deprecado en MySQL 8.0.17+, usar COUNT como fallback
+                try {
+                    $stmtTotal = $this->db->query('SELECT FOUND_ROWS() as total');
+                    $totalResult = $stmtTotal->fetch();
+                    $total = (int)($totalResult['total'] ?? 0);
+                } catch (\Exception $e) {
+                    error_log("⚠️ FOUND_ROWS no disponible, usando COUNT: " . $e->getMessage());
+                    $total = 0;
+                }
 
-                // Si FOUND_ROWS no funciona, hacer COUNT (fallback)
+                // Si FOUND_ROWS no funciona o devuelve 0, hacer COUNT (fallback)
                 if ($total === 0) {
-                    $stmtCount = $this->db->query(
-                        'SELECT COUNT(*) as total FROM tickets t 
-                         WHERE t.id_tecnico = ? 
-                         AND t.estatus != "Escalado"
-                         AND t.estatus != "Cerrado"',
-                        [$user['id_usuario']]
-                    );
-                    $total = (int)($stmtCount->fetch()['total'] ?? 0);
+                    try {
+                        $stmtCount = $this->db->query(
+                            'SELECT COUNT(*) as total FROM tickets t 
+                             WHERE t.id_tecnico = ? 
+                             AND t.estatus != "Escalado"
+                             AND t.estatus != "Cerrado"',
+                            [$user['id_usuario']]
+                        );
+                        $total = (int)($stmtCount->fetch()['total'] ?? 0);
+                    } catch (\Exception $e) {
+                        error_log("❌ Error en COUNT fallback: " . $e->getMessage());
+                        $total = count($tickets ?? []); // Fallback final: contar resultados obtenidos
+                    }
                 }
             } else {
                 // OPTIMIZADO: Para empleados también usar una sola consulta
@@ -183,20 +195,38 @@ class TicketRoutes
                 );
 
                 // Obtener total usando FOUND_ROWS (más rápido que COUNT separado)
-                $stmtTotal = $this->db->query('SELECT FOUND_ROWS() as total');
-                $total = (int)($stmtTotal->fetch()['total'] ?? 0);
+                // Nota: SQL_CALC_FOUND_ROWS está deprecado en MySQL 8.0.17+, usar COUNT como fallback
+                try {
+                    $stmtTotal = $this->db->query('SELECT FOUND_ROWS() as total');
+                    $totalResult = $stmtTotal->fetch();
+                    $total = (int)($totalResult['total'] ?? 0);
+                } catch (\Exception $e) {
+                    error_log("⚠️ FOUND_ROWS no disponible, usando COUNT: " . $e->getMessage());
+                    $total = 0;
+                }
 
-                // Si FOUND_ROWS no funciona, hacer COUNT (fallback)
+                // Si FOUND_ROWS no funciona o devuelve 0, hacer COUNT (fallback)
                 if ($total === 0) {
-                    $stmtCount = $this->db->query(
-                        'SELECT COUNT(*) as total FROM tickets t WHERE t.id_usuario = ? AND t.estatus != "Cerrado"',
-                        [$user['id_usuario']]
-                    );
-                    $total = (int)($stmtCount->fetch()['total'] ?? 0);
+                    try {
+                        $stmtCount = $this->db->query(
+                            'SELECT COUNT(*) as total FROM tickets t WHERE t.id_usuario = ? AND t.estatus != "Cerrado"',
+                            [$user['id_usuario']]
+                        );
+                        $total = (int)($stmtCount->fetch()['total'] ?? 0);
+                    } catch (\Exception $e) {
+                        error_log("❌ Error en COUNT fallback: " . $e->getMessage());
+                        $total = count($tickets ?? []); // Fallback final: contar resultados obtenidos
+                    }
                 }
             }
 
             $tickets = $stmt->fetchAll();
+            
+            // Validar que se obtuvieron tickets correctamente
+            if ($tickets === false) {
+                error_log("❌ Error: fetchAll() devolvió false");
+                $tickets = [];
+            }
 
             error_log('Tickets encontrados (raw): ' . count($tickets));
 
@@ -972,8 +1002,25 @@ class TicketRoutes
                                 );
                                 error_log("✅ [CORREOS] Correos de asignación enviados para ticket #$ticketId");
                             } catch (\Exception $emailEx) {
-                                error_log("❌ [CORREOS] Error crítico enviando correos de asignación: " . $emailEx->getMessage());
+                                $errorMsg = "❌ [CORREOS] Error crítico enviando correos de asignación para ticket #$ticketId: " . $emailEx->getMessage();
+                                error_log($errorMsg);
                                 error_log("❌ [CORREOS] Stack trace: " . $emailEx->getTraceAsString());
+                                error_log("❌ [CORREOS] Destinatarios: Técnico={$tecnico['correo']}, Empleado={$empleado['correo']}");
+                                error_log("❌ [CORREOS] DIAGNÓSTICO: ¿Existe archivo .env? ¿SENDGRID_API_KEY está configurado?");
+                                
+                                // Intentar verificar configuración
+                                $cleanEnv = function($key, $default = '') {
+                                    $value = $_ENV[$key] ?? $default;
+                                    if (is_string($value) && strlen($value) > 0) {
+                                        if (($value[0] === '"' && substr($value, -1) === '"') || ($value[0] === "'" && substr($value, -1) === "'")) {
+                                            $value = substr($value, 1, -1);
+                                        }
+                                    }
+                                    return trim($value);
+                                };
+                                $apiKey = $cleanEnv('SENDGRID_API_KEY', '');
+                                error_log("❌ [CORREOS] SENDGRID_API_KEY configurado: " . (empty($apiKey) ? 'NO ❌' : 'SÍ ✅ (Longitud: ' . strlen($apiKey) . ')'));
+                                // NO lanzar la excepción - las notificaciones ya se crearon
                             }
                         }
                     } else {
@@ -998,8 +1045,25 @@ class TicketRoutes
                                 error_log("⚠️ [CORREOS] Correo de creación falló para ticket #$ticketId (ver logs anteriores)");
                             }
                         } catch (\Exception $emailEx) {
-                            error_log("❌ [CORREOS] Error crítico enviando correo de creación: " . $emailEx->getMessage());
+                            $errorMsg = "❌ [CORREOS] Error crítico enviando correo de creación para ticket #$ticketId: " . $emailEx->getMessage();
+                            error_log($errorMsg);
                             error_log("❌ [CORREOS] Stack trace: " . $emailEx->getTraceAsString());
+                            error_log("❌ [CORREOS] Destinatario: {$empleado['correo']}");
+                            error_log("❌ [CORREOS] DIAGNÓSTICO: ¿Existe archivo .env? ¿SENDGRID_API_KEY está configurado?");
+                            
+                            // Intentar verificar configuración
+                            $cleanEnv = function($key, $default = '') {
+                                $value = $_ENV[$key] ?? $default;
+                                if (is_string($value) && strlen($value) > 0) {
+                                    if (($value[0] === '"' && substr($value, -1) === '"') || ($value[0] === "'" && substr($value, -1) === "'")) {
+                                        $value = substr($value, 1, -1);
+                                    }
+                                }
+                                return trim($value);
+                            };
+                            $apiKey = $cleanEnv('SENDGRID_API_KEY', '');
+                            error_log("❌ [CORREOS] SENDGRID_API_KEY configurado: " . (empty($apiKey) ? 'NO ❌' : 'SÍ ✅ (Longitud: ' . strlen($apiKey) . ')'));
+                            // NO lanzar la excepción - las notificaciones ya se crearon
                         }
                     }
                 }
@@ -1615,11 +1679,13 @@ class TicketRoutes
 
                          $emailService = new EmailService();
                          $emailService->sendTicketStatusChangeNotification($ticketData, $estatus, $estadoAnterior, $technician, $employee);
-                         error_log("📧 Correo de cambio de estado enviado para ticket #$id");
+                         error_log("✅ [CORREOS] Correo de cambio de estado enviado para ticket #$id");
                      } else {
-                         error_log("⚠️ No se puede enviar correo: empleado_correo vacío para ticket #$id");
+                         error_log("⚠️ [CORREOS] No se puede enviar correo: empleado_correo vacío para ticket #$id");
                      }
                  } catch (\Exception $e) {
+                     error_log("❌ [CORREOS] Error enviando correo de cambio de estado para ticket #$id: " . $e->getMessage());
+                     error_log("❌ [CORREOS] Stack trace: " . $e->getTraceAsString());
                      error_log("⚠️ Error enviando correo de cambio de estado para ticket #$id: " . $e->getMessage());
                  }
 
@@ -1733,10 +1799,13 @@ class TicketRoutes
                          error_log("📧 Preparando envío de correo de cierre para ticket #$id");
                          $emailService = new EmailService();
                          $emailService->sendTicketClosedNotification($ticketData, $employee);
-                         error_log("✅ Correo de cierre enviado para ticket #$id");
+                         error_log("✅ [CORREOS] Correo de cierre enviado para ticket #$id");
                      } else {
-                         error_log("⚠️ Correo del empleado inválido para ticket #$id: {$ticketInfo['empleado_correo']}");
+                         error_log("⚠️ [CORREOS] Correo del empleado inválido para ticket #$id: {$ticketInfo['empleado_correo']}");
                      }
+                 } catch (\Exception $e) {
+                     error_log("❌ [CORREOS] Error enviando correo de cierre para ticket #$id: " . $e->getMessage());
+                     error_log("❌ [CORREOS] Stack trace: " . $e->getTraceAsString());
                  } else {
                      error_log("⚠️ No se puede enviar correo: empleado_correo vacío o ticket no encontrado para ticket #$id");
                  }
@@ -2686,43 +2755,162 @@ class TicketRoutes
         }
 
         try {
-            // Get latest reopening
-            $stmt = $this->db->query(
-                'SELECT tr.id_reapertura, tr.tecnico_id, t.id_tecnico as ticket_tecnico_id
-                 FROM ticketreaperturas tr
-                 JOIN Tickets t ON tr.id_ticket = t.id_ticket
-                 WHERE tr.id_ticket = ?
-                 ORDER BY tr.fecha_reapertura DESC, tr.id_reapertura DESC
-                 LIMIT 1',
-                [$id]
-            );
-
-            $reopening = $stmt->fetch();
-
-            if (!$reopening) {
-                AuthMiddleware::sendError('No se encontró información de reapertura para este ticket', 404);
+            error_log("📝 [REApertura] Intentando registrar causa técnica para ticket #$id por usuario {$user['id_usuario']}");
+            
+            // Intentar con diferentes nombres de tabla (case-sensitive)
+            $reopening = null;
+            $nombresTabla = ['ticketreaperturas', 'TicketReaperturas', 'TICKETREAPERTURAS'];
+            $tablaEncontrada = false;
+            
+            foreach ($nombresTabla as $nombreTabla) {
+                try {
+                    error_log("🔍 [REApertura] Intentando con tabla: $nombreTabla");
+                    // Intentar con diferentes nombres de tabla de tickets también
+                    $nombresTablaTickets = ['tickets', 'Tickets', 'TICKETS'];
+                    $stmt = null;
+                    $tablaTicketsEncontrada = false;
+                    
+                    foreach ($nombresTablaTickets as $nombreTablaTickets) {
+                        try {
+                            $stmt = $this->db->query(
+                                "SELECT tr.id_reapertura, tr.tecnico_id, t.id_tecnico as ticket_tecnico_id
+                                 FROM `$nombreTabla` tr
+                                 JOIN `$nombreTablaTickets` t ON tr.id_ticket = t.id_ticket
+                                 WHERE tr.id_ticket = ?
+                                 ORDER BY tr.fecha_reapertura DESC, tr.id_reapertura DESC
+                                 LIMIT 1",
+                                [$id]
+                            );
+                            $tablaTicketsEncontrada = true;
+                            error_log("✅ [REApertura] Tabla de tickets encontrada: $nombreTablaTickets");
+                            break; // Si funciona, salir del loop
+                        } catch (\Exception $e) {
+                            error_log("⚠️ [REApertura] Tabla de tickets $nombreTablaTickets no encontrada: " . $e->getMessage());
+                            continue;
+                        }
+                    }
+                    
+                    if (!$stmt || !$tablaTicketsEncontrada) {
+                        error_log("⚠️ [REApertura] No se pudo encontrar ninguna tabla de tickets válida para $nombreTabla");
+                        continue; // Intentar siguiente tabla de reaperturas
+                    }
+                    
+                    $reopening = $stmt->fetch();
+                    if ($reopening) {
+                        $tablaEncontrada = true;
+                        error_log("✅ [REApertura] Tabla encontrada: $nombreTabla con tickets: $nombreTablaTickets");
+                        break;
+                    }
+                } catch (\Exception $e) {
+                    error_log("⚠️ [REApertura] Error con tabla $nombreTabla: " . $e->getMessage());
+                    continue;
+                }
             }
+
+            if (!$reopening || !$tablaEncontrada) {
+                error_log("❌ [REApertura] No se encontró información de reapertura para ticket #$id");
+                AuthMiddleware::sendError('No se encontró información de reapertura para este ticket', 404);
+                return;
+            }
+
+            error_log("📋 [REApertura] Datos encontrados: id_reapertura={$reopening['id_reapertura']}, tecnico_id={$reopening['tecnico_id']}, ticket_tecnico_id={$reopening['ticket_tecnico_id']}");
 
             // Check permissions
-            if ($reopening['ticket_tecnico_id'] != $user['id_usuario'] &&
-                $reopening['tecnico_id'] != $user['id_usuario'] &&
-                $user['rol'] !== 'administrador') {
+            $ticketTecnicoId = isset($reopening['ticket_tecnico_id']) ? (int)$reopening['ticket_tecnico_id'] : 0;
+            $reopeningTecnicoId = isset($reopening['tecnico_id']) ? (int)$reopening['tecnico_id'] : 0;
+            $userId = (int)$user['id_usuario'];
+            $esAdministrador = $user['rol'] === 'administrador';
+            
+            $tienePermiso = $esAdministrador || 
+                           $ticketTecnicoId === $userId || 
+                           $reopeningTecnicoId === $userId;
+            
+            if (!$tienePermiso) {
+                error_log("🚫 [REApertura] Sin permisos: usuario $userId, ticket_tecnico=$ticketTecnicoId, reapertura_tecnico=$reopeningTecnicoId, admin=$esAdministrador");
                 AuthMiddleware::sendError('No tienes permisos para actualizar la causa de este ticket', 403);
+                return;
             }
 
-            // Update reopening with cause
-            $this->db->query(
-                'UPDATE ticketreaperturas SET causa_tecnico = ?, tecnico_id = ?, fecha_respuesta_tecnico = NOW() WHERE id_reapertura = ?',
-                [trim($causa), $user['id_usuario'], $reopening['id_reapertura']]
-            );
+            // Update reopening with cause - intentar con diferentes nombres de tabla
+            $actualizado = false;
+            foreach ($nombresTabla as $nombreTabla) {
+                try {
+                    error_log("💾 [REApertura] Actualizando causa en tabla: $nombreTabla");
+                    $this->db->query(
+                        "UPDATE `$nombreTabla` 
+                         SET causa_tecnico = ?, tecnico_id = ?, fecha_respuesta_tecnico = NOW() 
+                         WHERE id_reapertura = ?",
+                        [trim($causa), $userId, $reopening['id_reapertura']]
+                    );
+                    $actualizado = true;
+                    error_log("✅ [REApertura] Causa actualizada exitosamente en tabla: $nombreTabla");
+                    break;
+                } catch (\Exception $e) {
+                    error_log("⚠️ [REApertura] Error actualizando en tabla $nombreTabla: " . $e->getMessage());
+                    continue;
+                }
+            }
+            
+            if (!$actualizado) {
+                throw new \Exception("No se pudo actualizar la causa en ninguna tabla de reaperturas");
+            }
+
+            // Obtener datos actualizados de la reapertura para devolverlos
+            $reaperturaActualizada = null;
+            $tablaUsadaParaUpdate = null;
+            
+            // Encontrar qué tabla se usó para el UPDATE
+            foreach ($nombresTabla as $nombreTabla) {
+                try {
+                    $stmtActualizado = $this->db->query(
+                        "SELECT id_reapertura, id_ticket, usuario_id, tecnico_id, observaciones_usuario, 
+                                causa_tecnico, fecha_reapertura, fecha_respuesta_tecnico, estado_reapertura
+                         FROM `$nombreTabla`
+                         WHERE id_reapertura = ?",
+                        [$reopening['id_reapertura']]
+                    );
+                    $temp = $stmtActualizado->fetch();
+                    if ($temp && !empty($temp['causa_tecnico'])) {
+                        $reaperturaActualizada = $temp;
+                        $tablaUsadaParaUpdate = $nombreTabla;
+                        error_log("✅ [REApertura] Datos actualizados obtenidos de tabla: $nombreTabla");
+                        break;
+                    }
+                } catch (\Exception $e) {
+                    error_log("⚠️ [REApertura] Error obteniendo datos actualizados de $nombreTabla: " . $e->getMessage());
+                    continue;
+                }
+            }
+
+            if (!$reaperturaActualizada) {
+                error_log("⚠️ [REApertura] No se pudieron obtener datos actualizados, usando datos del reopening original");
+                // Usar datos básicos si no se pueden obtener actualizados
+                $reaperturaActualizada = [
+                    'id_reapertura' => $reopening['id_reapertura'],
+                    'causa_tecnico' => trim($causa),
+                    'fecha_respuesta_tecnico' => date('Y-m-d H:i:s')
+                ];
+            }
+
+            error_log("✅ [REApertura] Causa registrada correctamente para ticket #$id");
 
             AuthMiddleware::sendResponse([
-                'message' => 'Causa de reapertura registrada correctamente'
+                'message' => 'Causa de reapertura registrada correctamente',
+                'reapertura' => [
+                    'id' => (int)$reaperturaActualizada['id_reapertura'],
+                    'observacionesUsuario' => $reaperturaActualizada['observaciones_usuario'] ?? null,
+                    'causaTecnico' => $reaperturaActualizada['causa_tecnico'] ?? trim($causa),
+                    'fechaReapertura' => $reaperturaActualizada['fecha_reapertura'] ?? null,
+                    'fechaRespuestaTecnico' => $reaperturaActualizada['fecha_respuesta_tecnico'] ?? date('Y-m-d H:i:s')
+                ]
             ]);
 
         } catch (\Exception $e) {
-            error_log('Error adding technician reopen comment: ' . $e->getMessage());
-            AuthMiddleware::sendError('Error interno del servidor', 500);
+            $errorMsg = 'Error adding technician reopen comment: ' . $e->getMessage();
+            error_log("❌ [REApertura] $errorMsg");
+            error_log("❌ [REApertura] Stack trace: " . $e->getTraceAsString());
+            error_log("❌ [REApertura] Ticket ID: $id, Usuario: {$user['id_usuario']}, Causa: " . substr(trim($causa), 0, 50));
+            AuthMiddleware::sendError('Error interno del servidor: ' . $e->getMessage(), 500);
         }
     }
 
@@ -2753,7 +2941,31 @@ class TicketRoutes
                 return false;
             }
 
-            // VALIDACIÓN CRÍTICA: Si el mensaje empieza con "Tu ticket", solo enviar a usuarios (empleados)
+            // VALIDACIÓN CRÍTICA 1: Si el mensaje empieza con "Se te ha asignado" o "Se te asignó", solo enviar a técnicos/administradores
+            // NO enviar a empleados
+            if (stripos($mensaje, 'Se te ha asignado') === 0 || stripos($mensaje, 'Se te asignó') === 0 || stripos($mensaje, 'Se te asignó manualmente') === 0) {
+                try {
+                    $stmtRol = $this->db->query(
+                        'SELECT rol FROM usuarios WHERE id_usuario = ?',
+                        [$idUsuario]
+                    );
+                    $usuarioData = $stmtRol->fetch();
+                    
+                    if ($usuarioData && isset($usuarioData['rol'])) {
+                        $rol = strtolower(trim($usuarioData['rol']));
+                        if ($rol !== 'tecnico' && $rol !== 'administrador') {
+                            error_log("🚫 [NOTIFICACIONES] BLOQUEADA: Notificación 'Se te ha asignado' para usuario ID $idUsuario con rol '$rol'. Solo se envían a técnicos/administradores.");
+                            return false;
+                        }
+                    }
+                } catch (\Exception $e) {
+                    error_log("⚠️ [NOTIFICACIONES] Error verificando rol del usuario $idUsuario para 'Se te ha asignado': " . $e->getMessage());
+                    // Si no se puede verificar el rol, no crear la notificación para evitar enviar a empleados
+                    return false;
+                }
+            }
+            
+            // VALIDACIÓN CRÍTICA 2: Si el mensaje empieza con "Tu ticket", solo enviar a usuarios (empleados)
             // NO enviar a técnicos o administradores
             if (stripos($mensaje, 'Tu ticket') === 0) {
                 try {

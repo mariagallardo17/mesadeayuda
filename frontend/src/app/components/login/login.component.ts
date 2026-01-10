@@ -42,6 +42,14 @@ export class LoginComponent implements OnInit, OnDestroy {
   }
 
   ngOnInit(): void {
+    // Verificar si hay parámetro de expiración de sesión
+    if (isPlatformBrowser(this.platformId)) {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (urlParams.get('expired') === 'true') {
+        this.errorMessage = 'Tu sesión ha expirado. Por favor, inicia sesión nuevamente.';
+      }
+    }
+
     // Verificar si el usuario ya está autenticado
     const currentUser = this.authService.getCurrentUser();
     if (currentUser) {

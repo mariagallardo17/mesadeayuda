@@ -84,12 +84,37 @@ export class TicketTrackingComponent implements OnInit, OnDestroy {
       takeUntil(this.destroy$)
     ).subscribe({
       next: (response) => {
-        // Extraer tickets de la respuesta paginada
-        const tickets = response.tickets || [];
+        // Validar que la respuesta sea válida
+        if (!response) {
+          console.warn('⚠️ Respuesta vacía del servidor');
+          this.tickets = [];
+          this.filteredTickets = [];
+          this.resetPagination();
+          this.isLoading = false;
+          return;
+        }
+
+        // Extraer tickets de la respuesta paginada (validar formato)
+        let tickets: any[] = [];
+        if (response && typeof response === 'object') {
+          if (response.tickets && Array.isArray(response.tickets)) {
+            tickets = response.tickets;
+          } else if (Array.isArray(response)) {
+            tickets = response;
+          } else {
+            console.warn('⚠️ Formato de respuesta no reconocido:', response);
+            tickets = [];
+          }
+        } else {
+          tickets = [];
+        }
+
         console.log('📋 Tickets recibidos del backend:', tickets.length);
-        console.log('📋 Lista completa de tickets:', tickets);
+        
         // Filtrar tickets: excluir reaperturas y tickets cerrados (ya completados)
         const visibles = tickets.filter((ticket: any) => {
+          if (!ticket || typeof ticket !== 'object') return false;
+          
           const estadoLower = (ticket.estado || '').toLowerCase().trim();
           // Excluir tickets cerrados: "cerrado", "cerr", "cerr.", etc.
           const esCerrado = estadoLower === 'cerrado' || 
@@ -97,13 +122,13 @@ export class TicketTrackingComponent implements OnInit, OnDestroy {
                            estadoLower === 'cerr';
           return !ticket.reapertura && !esCerrado;
         });
+        
         console.log('✅ Tickets visibles (sin reapertura y sin cerrados):', visibles.length);
-        console.log('✅ Lista de tickets visibles:', visibles);
         this.tickets = visibles;
         this.filteredTickets = visibles;
         
         // Actualizar información de paginación
-        if (response.pagination) {
+        if (response && response.pagination && typeof response.pagination === 'object') {
           this.paginationInfo = response.pagination;
           this.totalItems = response.pagination.total || 0;
           this.totalPages = response.pagination.totalPages || 0;
@@ -111,15 +136,25 @@ export class TicketTrackingComponent implements OnInit, OnDestroy {
           this.endItem = response.pagination.endItem || 0;
           this.hasNextPage = response.pagination.hasNextPage || false;
           this.hasPrevPage = response.pagination.hasPrevPage || false;
+        } else {
+          // Si no hay paginación, calcularla
+          this.resetPagination();
         }
         
         this.isLoading = false;
       },
       error: (error) => {
         console.error('❌ Error cargando tickets:', error);
-        console.error('❌ Detalles del error:', error.error);
+        this.tickets = [];
+        this.filteredTickets = [];
+        this.resetPagination();
         this.isLoading = false;
-        alert('Error al cargar los tickets: ' + (error.error?.error || error.message));
+        
+        // No mostrar alert si es error 401 (ya se maneja en el interceptor)
+        if (error?.status !== 401) {
+          const errorMsg = error?.error?.error || error?.message || 'Error al cargar los tickets';
+          console.error('Error detallado:', errorMsg);
+        }
       }
     });
   }
@@ -156,6 +191,15 @@ export class TicketTrackingComponent implements OnInit, OnDestroy {
     this.itemsPerPage = newLimit;
     this.currentPage = 1; // Reset a la primera página
     this.loadTickets();
+  }
+
+  private resetPagination(): void {
+    this.totalItems = this.tickets.length;
+    this.totalPages = Math.ceil(this.totalItems / this.itemsPerPage) || 1;
+    this.startItem = this.tickets.length > 0 ? 1 : 0;
+    this.endItem = this.tickets.length;
+    this.hasNextPage = false;
+    this.hasPrevPage = false;
   }
 
   getPaginationArray(): number[] {

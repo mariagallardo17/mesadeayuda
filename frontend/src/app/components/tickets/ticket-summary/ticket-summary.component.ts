@@ -93,28 +93,78 @@ export class TicketSummaryComponent implements OnInit, OnDestroy {
       takeUntil(this.destroy$)
     ).subscribe({
       next: (response) => {
-        // Extraer tickets de la respuesta paginada
-        this.tickets = response.tickets || [];
-        
-        // Actualizar información de paginación
-        if (response.pagination) {
-          this.paginationInfo = response.pagination;
-          this.totalItems = response.pagination.total || 0;
-          this.totalPages = response.pagination.totalPages || 0;
-          this.startItem = response.pagination.startItem || 0;
-          this.endItem = response.pagination.endItem || 0;
-          this.hasNextPage = response.pagination.hasNextPage || false;
-          this.hasPrevPage = response.pagination.hasPrevPage || false;
+        // Validar que la respuesta sea válida
+        if (!response) {
+          console.warn('⚠️ Respuesta vacía del servidor');
+          this.tickets = [];
+          this.resetPagination();
+          this.calculateStats();
+          this.isLoading = false;
+          return;
+        }
+
+        // Extraer tickets de la respuesta paginada (validar formato)
+        if (response && typeof response === 'object') {
+          // Formato nuevo con paginación
+          if (response.tickets && Array.isArray(response.tickets)) {
+            this.tickets = response.tickets;
+            
+            // Actualizar información de paginación
+            if (response.pagination && typeof response.pagination === 'object') {
+              this.paginationInfo = response.pagination;
+              this.totalItems = response.pagination.total || 0;
+              this.totalPages = response.pagination.totalPages || 0;
+              this.startItem = response.pagination.startItem || 0;
+              this.endItem = response.pagination.endItem || 0;
+              this.hasNextPage = response.pagination.hasNextPage || false;
+              this.hasPrevPage = response.pagination.hasPrevPage || false;
+            } else {
+              // Si no hay paginación, calcularla
+              this.resetPagination();
+            }
+          } 
+          // Formato antiguo (array directo)
+          else if (Array.isArray(response)) {
+            this.tickets = response;
+            this.resetPagination();
+          } 
+          else {
+            console.warn('⚠️ Formato de respuesta no reconocido:', response);
+            this.tickets = [];
+            this.resetPagination();
+          }
+        } else {
+          console.warn('⚠️ Respuesta inválida:', response);
+          this.tickets = [];
+          this.resetPagination();
         }
         
         this.calculateStats();
         this.isLoading = false;
       },
       error: (error) => {
-        console.error('Error cargando tickets:', error);
+        console.error('❌ Error cargando tickets:', error);
+        this.tickets = [];
+        this.resetPagination();
+        this.calculateStats();
         this.isLoading = false;
+        
+        // No mostrar alert si es error 401 (ya se maneja en el interceptor)
+        if (error?.status !== 401) {
+          const errorMsg = error?.error?.error || error?.message || 'Error al cargar los tickets';
+          console.error('Error detallado:', errorMsg);
+        }
       }
     });
+  }
+
+  private resetPagination(): void {
+    this.totalItems = this.tickets.length;
+    this.totalPages = Math.ceil(this.totalItems / this.itemsPerPage) || 1;
+    this.startItem = this.tickets.length > 0 ? 1 : 0;
+    this.endItem = this.tickets.length;
+    this.hasNextPage = false;
+    this.hasPrevPage = false;
   }
 
   // Métodos de paginación

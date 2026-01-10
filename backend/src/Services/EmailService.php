@@ -2,6 +2,9 @@
 
 namespace App\Services;
 
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\Exception as PHPMailerException;
+
 class EmailService
 {
     public function __construct()
@@ -16,27 +19,35 @@ class EmailService
             return trim($value);
         };
 
-        // Verificar que SendGrid esté configurado
+        // Verificar configuración de correo (SMTP o SendGrid)
+        $smtpHost = $cleanEnv('SMTP_HOST', '');
+        $smtpUser = $cleanEnv('SMTP_USER', '');
+        $smtpPass = $cleanEnv('SMTP_PASS', '');
         $sendGridApiKey = $cleanEnv('SENDGRID_API_KEY', '');
-        if (empty($sendGridApiKey)) {
-            error_log("⚠️ ADVERTENCIA: SENDGRID_API_KEY no está configurado. Los correos no se podrán enviar.");
-        } else {
+        
+        if (!empty($smtpHost) && !empty($smtpUser) && !empty($smtpPass)) {
+            error_log("✅ SMTP configurado correctamente (Host: $smtpHost)");
+        } elseif (!empty($sendGridApiKey)) {
             error_log("✅ SendGrid configurado correctamente");
+        } else {
+            error_log("⚠️ ADVERTENCIA: Ni SMTP ni SendGrid están configurados. Configura SMTP_HOST, SMTP_USER, SMTP_PASS o SENDGRID_API_KEY en el archivo .env");
         }
     }
 
     public function sendEmail($to, $subject, $htmlBody)
     {
         // Normalizar el correo: trim, lowercase, eliminar espacios
+        $toOriginal = $to;
         $to = trim(strtolower($to));
 
         // Validar que el destinatario sea válido
         if (empty($to) || !filter_var($to, FILTER_VALIDATE_EMAIL)) {
-            error_log("❌ Correo inválido después de normalizar: '$to' (original: " . var_export(func_get_arg(0), true) . ")");
+            $errorMsg = "❌ Correo inválido después de normalizar: '$to' (original: " . var_export($toOriginal, true) . ")";
+            error_log($errorMsg);
             throw new \Exception("Dirección de correo inválida: $to");
         }
 
-        error_log("📧 Correo normalizado para envío: '$to'");
+        error_log("📧 [CORREOS] Intentando enviar correo a: '$to' con asunto: '$subject'");
 
         // Helper para limpiar variables de entorno
         $cleanEnv = function($key, $default = '') {
@@ -49,25 +60,144 @@ class EmailService
             return trim($value);
         };
 
-        // Verificar que SendGrid esté configurado
+        // Verificar configuración: Priorizar SMTP sobre SendGrid
+        $smtpHost = $cleanEnv('SMTP_HOST', '');
+        $smtpUser = $cleanEnv('SMTP_USER', '');
+        $smtpPass = $cleanEnv('SMTP_PASS', '');
         $sendGridApiKey = $cleanEnv('SENDGRID_API_KEY', '');
-        if (empty($sendGridApiKey)) {
-            $errorMsg = "SENDGRID_API_KEY no está configurado. Configura esta variable de entorno para enviar correos.";
-            error_log("❌ $errorMsg");
-            throw new \Exception($errorMsg);
+        
+        // PRIORIDAD 1: Intentar SMTP si está configurado
+        if (!empty($smtpHost) && !empty($smtpUser) && !empty($smtpPass)) {
+            error_log("📤 [CORREOS] Usando SMTP (Host: $smtpHost)");
+            try {
+                $result = $this->sendEmailUsingSMTP($to, $subject, $htmlBody);
+                if ($result) {
+                    error_log("✅ [CORREOS] Correo enviado exitosamente a: $to usando SMTP");
+                    return true;
+                } else {
+                    error_log("⚠️ [CORREOS] SMTP falló, intentando SendGrid como fallback...");
+                    // Fallback a SendGrid si está configurado
+                    if (!empty($sendGridApiKey)) {
+                        return $this->sendEmailUsingSendGrid($to, $subject, $htmlBody);
+                    } else {
+                        throw new \Exception("SMTP falló y SendGrid no está configurado");
+                    }
+                }
+            } catch (\Exception $e) {
+                error_log("❌ [CORREOS] Error con SMTP: " . $e->getMessage());
+                // Fallback a SendGrid si está configurado
+                if (!empty($sendGridApiKey)) {
+                    error_log("🔄 [CORREOS] Intentando SendGrid como fallback...");
+                    return $this->sendEmailUsingSendGrid($to, $subject, $htmlBody);
+                } else {
+                    throw $e;
+                }
+            }
         }
+        // PRIORIDAD 2: Usar SendGrid si SMTP no está configurado
+        elseif (!empty($sendGridApiKey)) {
+            error_log("📤 [CORREOS] Usando SendGrid API");
+            return $this->sendEmailUsingSendGrid($to, $subject, $htmlBody);
+        }
+        // ERROR: Ninguna configuración disponible
+        else {
+            $errorMsg = "❌ [CORREOS] No hay configuración de correo disponible. Configura SMTP (SMTP_HOST, SMTP_USER, SMTP_PASS) o SendGrid (SENDGRID_API_KEY) en el archivo .env";
+            error_log($errorMsg);
+            error_log("❌ [CORREOS] INSTRUCCIONES:");
+            error_log("❌ [CORREOS] Para SMTP: Configura SMTP_HOST, SMTP_USER, SMTP_PASS en .env");
+            error_log("❌ [CORREOS] Para SendGrid: Configura SENDGRID_API_KEY en .env");
+            throw new \Exception("No hay configuración de correo disponible. Verifica el archivo .env");
+        }
+    }
 
-        // Usar solo SendGrid (sin SMTP)
-        error_log("📤 Intentando enviar correo a: $to usando SendGrid API");
-        $result = $this->sendEmailUsingSendGrid($to, $subject, $htmlBody);
+    /**
+     * Método usando PHPMailer con SMTP
+     * Requiere: SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS configurados en .env
+     */
+    private function sendEmailUsingSMTP($to, $subject, $htmlBody)
+    {
+        try {
+            $cleanEnv = function($key, $default = '') {
+                $value = $_ENV[$key] ?? $default;
+                if (is_string($value) && strlen($value) > 0) {
+                    if (($value[0] === '"' && substr($value, -1) === '"') || ($value[0] === "'" && substr($value, -1) === "'")) {
+                        $value = substr($value, 1, -1);
+                    }
+                }
+                return trim($value);
+            };
 
-        if ($result) {
-            error_log("✅ Correo enviado exitosamente a: $to usando SendGrid");
+            $smtpHost = $cleanEnv('SMTP_HOST', 'smtp.gmail.com');
+            $smtpPort = (int)$cleanEnv('SMTP_PORT', 587);
+            $smtpUser = $cleanEnv('SMTP_USER', '');
+            $smtpPass = $cleanEnv('SMTP_PASS', '');
+            $smtpFrom = $cleanEnv('SMTP_FROM', '');
+
+            if (empty($smtpHost) || empty($smtpUser) || empty($smtpPass)) {
+                error_log("❌ [CORREOS] SMTP no está completamente configurado. Requiere: SMTP_HOST, SMTP_USER, SMTP_PASS");
+                return false;
+            }
+
+            // Determinar remitente
+            $fromEmail = $smtpUser;
+            $fromName = 'Mesa de Ayuda - ITS';
+            
+            if (!empty($smtpFrom)) {
+                if (preg_match('/^(.+?)\s*<(.+?)>$/', $smtpFrom, $matches)) {
+                    $fromName = trim($matches[1]);
+                    $fromEmail = trim($matches[2]);
+                } else {
+                    $fromEmail = $smtpFrom;
+                }
+            }
+
+            error_log("📧 [CORREOS] Configurando PHPMailer - Host: $smtpHost, Port: $smtpPort, User: $smtpUser");
+
+            $mail = new PHPMailer(true);
+
+            // Configuración del servidor SMTP
+            $mail->isSMTP();
+            $mail->Host = $smtpHost;
+            $mail->SMTPAuth = true;
+            $mail->Username = $smtpUser;
+            $mail->Password = $smtpPass;
+            $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS; // Usar TLS
+            $mail->Port = $smtpPort;
+            $mail->CharSet = 'UTF-8';
+
+            // Opciones SSL para desarrollo (desactivar verificación en caso de problemas)
+            $mail->SMTPOptions = [
+                'ssl' => [
+                    'verify_peer' => false,
+                    'verify_peer_name' => false,
+                    'allow_self_signed' => true
+                ]
+            ];
+
+            // Remitente y destinatario
+            $mail->setFrom($fromEmail, $fromName);
+            $mail->addAddress($to);
+            $mail->addReplyTo($fromEmail, $fromName);
+
+            // Contenido
+            $mail->isHTML(true);
+            $mail->Subject = $subject;
+            $mail->Body = $htmlBody;
+            $mail->AltBody = strip_tags($htmlBody);
+
+            // Enviar
+            $mail->send();
+            error_log("✅ [CORREOS] PHPMailer envió el correo exitosamente a: $to");
             return true;
-        } else {
-            $errorMsg = "No se pudo enviar el correo usando SendGrid. Verifica SENDGRID_API_KEY y que el remitente esté verificado en SendGrid.";
-            error_log("❌ $errorMsg");
-            throw new \Exception($errorMsg);
+
+        } catch (PHPMailerException $e) {
+            error_log("❌ [CORREOS] PHPMailer Error: " . $mail->ErrorInfo);
+            error_log("❌ [CORREOS] Excepción: " . $e->getMessage());
+            return false;
+        } catch (\Exception $e) {
+            error_log("❌ [CORREOS] Excepción en sendEmailUsingSMTP: " . $e->getMessage());
+            error_log("❌ [CORREOS] Stack trace: " . $e->getTraceAsString());
+            return false;
         }
     }
 
@@ -156,9 +286,16 @@ class EmailService
             $sendGridApiKey = $cleanEnv('SENDGRID_API_KEY', '');
 
             if (empty($sendGridApiKey)) {
-                error_log("⚠️ SendGrid no está configurado (SENDGRID_API_KEY no encontrado)");
+                $errorMsg = "❌ [CORREOS] SendGrid no está configurado - SENDGRID_API_KEY no encontrado o vacío";
+                error_log($errorMsg);
+                error_log("❌ [CORREOS] INSTRUCCIONES:");
+                error_log("❌ [CORREOS] 1. Crea un archivo .env en la carpeta backend/");
+                error_log("❌ [CORREOS] 2. Agrega: SENDGRID_API_KEY=tu_api_key_aqui");
+                error_log("❌ [CORREOS] 3. Obtén tu API Key desde: https://app.sendgrid.com/settings/api_keys");
                 return false;
             }
+            
+            error_log("✅ [CORREOS] SENDGRID_API_KEY encontrado (Longitud: " . strlen($sendGridApiKey) . " caracteres)");
 
             // Obtener remitente
             $smtpFrom = $cleanEnv('SMTP_FROM', '');
@@ -231,8 +368,10 @@ class EmailService
             }
 
             if ($httpCode >= 200 && $httpCode < 300) {
-                error_log("✅ SendGrid envió el correo exitosamente (HTTP $httpCode)");
-                error_log("✅ Correo aceptado por SendGrid - De: $fromEmail, Para: $to");
+                error_log("✅ [CORREOS] SendGrid envió el correo exitosamente a '$to' (HTTP $httpCode)");
+                if ($response) {
+                    error_log("📊 [CORREOS] Respuesta SendGrid: " . substr($response, 0, 200));
+                }
                 return true;
             } else {
                 // Parsear respuesta de error de SendGrid para mensaje más útil
@@ -291,21 +430,21 @@ class EmailService
         } else {
             try {
                 // Send to technician
-                error_log("📧 [Ticket #{$ticket['id']}] Intentando enviar correo de asignación al técnico: {$technician['email']}");
+                error_log("📧 [CORREOS] Enviando correo de asignación al técnico: {$technician['email']} para ticket #{$ticket['id']}");
                 $this->sendEmail($technician['email'], $subject, $htmlContent);
-                error_log("✅ [Ticket #{$ticket['id']}] Correo enviado exitosamente al técnico: {$technician['email']}");
+                error_log("✅ [CORREOS] Correo de asignación enviado exitosamente al técnico: {$technician['email']} para ticket #{$ticket['id']}");
             } catch (\Exception $e) {
-                $errorMsg = "Error enviando correo al técnico {$technician['email']}: " . $e->getMessage();
-                error_log("❌ [Ticket #{$ticket['id']}] $errorMsg");
-                error_log("❌ [Ticket #{$ticket['id']}] Stack trace: " . $e->getTraceAsString());
+                $errorMsg = "❌ [CORREOS] Error enviando correo al técnico {$technician['email']} para ticket #{$ticket['id']}: " . $e->getMessage();
+                error_log($errorMsg);
+                error_log("❌ [CORREOS] Stack trace: " . $e->getTraceAsString());
                 $errors[] = $errorMsg;
             }
         }
 
         // Validar email del empleado antes de enviar
         if (empty($employee['email']) || !filter_var($employee['email'], FILTER_VALIDATE_EMAIL)) {
-            $errorMsg = "Email del empleado inválido o vacío: " . ($employee['email'] ?? 'NO DEFINIDO');
-            error_log("❌ [Ticket #{$ticket['id']}] $errorMsg");
+            $errorMsg = "❌ [CORREOS] Email del empleado inválido o vacío para ticket asignado #{$ticket['id']}: " . ($employee['email'] ?? 'NO DEFINIDO');
+            error_log($errorMsg);
             $errors[] = $errorMsg;
         } else {
             try {
@@ -313,12 +452,12 @@ class EmailService
                 $employeeSubject = "Tu ticket #{$ticket['id']} ha sido asignado";
                 $employeeContent = $this->generateTicketAssignedEmployeeEmail($ticket, $technician, $employee);
 
-                error_log("📧 [Ticket #{$ticket['id']}] Intentando enviar correo de asignación al empleado: {$employee['email']}");
+                error_log("📧 [CORREOS] Enviando correo de asignación al empleado: {$employee['email']} para ticket #{$ticket['id']}");
                 $this->sendEmail($employee['email'], $employeeSubject, $employeeContent);
-                error_log("✅ [Ticket #{$ticket['id']}] Correo enviado exitosamente al empleado: {$employee['email']}");
+                error_log("✅ [CORREOS] Correo de asignación enviado exitosamente al empleado: {$employee['email']} para ticket #{$ticket['id']}");
             } catch (\Exception $e) {
-                $errorMsg = "Error enviando correo al empleado {$employee['email']}: " . $e->getMessage();
-                error_log("❌ [Ticket #{$ticket['id']}] $errorMsg");
+                $errorMsg = "❌ [CORREOS] Error enviando correo al empleado {$employee['email']} para ticket #{$ticket['id']}: " . $e->getMessage();
+                error_log($errorMsg);
                 error_log("❌ [Ticket #{$ticket['id']}] Stack trace: " . $e->getTraceAsString());
                 $errors[] = $errorMsg;
             }
@@ -431,29 +570,71 @@ HTML;
         $htmlContent = $this->generateTicketClosedEmail($ticket, $employee);
 
         try {
+            if (empty($employee['email']) || !filter_var($employee['email'], FILTER_VALIDATE_EMAIL)) {
+                $errorMsg = "❌ [CORREOS] Email del empleado inválido o vacío para ticket cerrado #{$ticket['id']}: " . ($employee['email'] ?? 'NO DEFINIDO');
+                error_log($errorMsg);
+                return false;
+            }
+            
+            error_log("📧 [CORREOS] Intentando enviar correo de cierre al empleado: {$employee['email']} para ticket #{$ticket['id']}");
             $this->sendEmail($employee['email'], $subject, $htmlContent);
-            error_log("Correo de ticket cerrado enviado para ticket #{$ticket['id']}");
+            error_log("✅ [CORREOS] Correo de ticket cerrado enviado exitosamente para ticket #{$ticket['id']}");
+            return true;
         } catch (\Exception $e) {
-            error_log("Error enviando correo de ticket cerrado: " . $e->getMessage());
+            $errorMsg = "❌ [CORREOS] Error enviando correo de ticket cerrado para ticket #{$ticket['id']}: " . $e->getMessage();
+            error_log($errorMsg);
+            error_log("❌ [CORREOS] Stack trace: " . $e->getTraceAsString());
+            return false;
         }
     }
 
     public function sendTicketEscalatedNotification($ticket, $newTechnician, $oldTechnician, $employee, $motivo)
     {
         $subject = "Ticket #{$ticket['id']} escalado";
+        $errors = [];
 
         try {
-            // Enviar al nuevo técnico
-            $htmlContentNewTech = $this->generateTicketEscalatedEmail($ticket, $newTechnician, $oldTechnician, $employee, $motivo, 'new');
-            $this->sendEmail($newTechnician['email'], $subject, $htmlContentNewTech);
-
-            // Enviar al empleado
-            $htmlContentEmployee = $this->generateTicketEscalatedEmail($ticket, $newTechnician, $oldTechnician, $employee, $motivo, 'employee');
-            $this->sendEmail($employee['email'], "Tu ticket #{$ticket['id']} ha sido escalado", $htmlContentEmployee);
-
-            error_log("Correos de ticket escalado enviados para ticket #{$ticket['id']}");
+            // Validar y enviar al nuevo técnico
+            if (empty($newTechnician['email']) || !filter_var($newTechnician['email'], FILTER_VALIDATE_EMAIL)) {
+                $errorMsg = "❌ [CORREOS] Email del nuevo técnico inválido para ticket escalado #{$ticket['id']}: " . ($newTechnician['email'] ?? 'NO DEFINIDO');
+                error_log($errorMsg);
+                $errors[] = $errorMsg;
+            } else {
+                $htmlContentNewTech = $this->generateTicketEscalatedEmail($ticket, $newTechnician, $oldTechnician, $employee, $motivo, 'new');
+                error_log("📧 [CORREOS] Enviando correo de escalamiento al nuevo técnico: {$newTechnician['email']} para ticket #{$ticket['id']}");
+                $this->sendEmail($newTechnician['email'], $subject, $htmlContentNewTech);
+                error_log("✅ [CORREOS] Correo enviado al nuevo técnico: {$newTechnician['email']} para ticket #{$ticket['id']}");
+            }
         } catch (\Exception $e) {
-            error_log("Error enviando correos de ticket escalado: " . $e->getMessage());
+            $errorMsg = "❌ [CORREOS] Error enviando correo al nuevo técnico para ticket escalado #{$ticket['id']}: " . $e->getMessage();
+            error_log($errorMsg);
+            error_log("❌ [CORREOS] Stack trace: " . $e->getTraceAsString());
+            $errors[] = $errorMsg;
+        }
+
+        try {
+            // Validar y enviar al empleado
+            if (empty($employee['email']) || !filter_var($employee['email'], FILTER_VALIDATE_EMAIL)) {
+                $errorMsg = "❌ [CORREOS] Email del empleado inválido para ticket escalado #{$ticket['id']}: " . ($employee['email'] ?? 'NO DEFINIDO');
+                error_log($errorMsg);
+                $errors[] = $errorMsg;
+            } else {
+                $htmlContentEmployee = $this->generateTicketEscalatedEmail($ticket, $newTechnician, $oldTechnician, $employee, $motivo, 'employee');
+                error_log("📧 [CORREOS] Enviando correo de escalamiento al empleado: {$employee['email']} para ticket #{$ticket['id']}");
+                $this->sendEmail($employee['email'], "Tu ticket #{$ticket['id']} ha sido escalado", $htmlContentEmployee);
+                error_log("✅ [CORREOS] Correo enviado al empleado: {$employee['email']} para ticket #{$ticket['id']}");
+            }
+        } catch (\Exception $e) {
+            $errorMsg = "❌ [CORREOS] Error enviando correo al empleado para ticket escalado #{$ticket['id']}: " . $e->getMessage();
+            error_log($errorMsg);
+            error_log("❌ [CORREOS] Stack trace: " . $e->getTraceAsString());
+            $errors[] = $errorMsg;
+        }
+
+        if (empty($errors)) {
+            error_log("✅ [CORREOS] Todos los correos de ticket escalado enviados correctamente para ticket #{$ticket['id']}");
+        } else {
+            error_log("⚠️ [CORREOS] Algunos correos de escalamiento no se pudieron enviar para ticket #{$ticket['id']}: " . implode('; ', $errors));
         }
     }
 
@@ -465,33 +646,48 @@ HTML;
         $errors = [];
 
         try {
-            // Enviar al empleado
-            error_log("📧 Intentando enviar correo de cambio de estado al empleado: {$employee['email']}");
-            $this->sendEmail($employee['email'], $subject, $htmlContent);
-            error_log("✅ Correo enviado al empleado: {$employee['email']}");
+            // Validar email del empleado antes de enviar
+            if (empty($employee['email']) || !filter_var($employee['email'], FILTER_VALIDATE_EMAIL)) {
+                $errorMsg = "❌ [CORREOS] Email del empleado inválido o vacío para cambio de estado ticket #{$ticket['id']}: " . ($employee['email'] ?? 'NO DEFINIDO');
+                error_log($errorMsg);
+                $errors[] = $errorMsg;
+            } else {
+                // Enviar al empleado
+                error_log("📧 [CORREOS] Intentando enviar correo de cambio de estado al empleado: {$employee['email']} para ticket #{$ticket['id']}");
+                $this->sendEmail($employee['email'], $subject, $htmlContent);
+                error_log("✅ [CORREOS] Correo enviado al empleado: {$employee['email']} para ticket #{$ticket['id']}");
+            }
         } catch (\Exception $e) {
-            $errorMsg = "Error enviando correo al empleado {$employee['email']}: " . $e->getMessage();
-            error_log("❌ $errorMsg");
+            $errorMsg = "❌ [CORREOS] Error enviando correo al empleado {$employee['email']} para ticket #{$ticket['id']}: " . $e->getMessage();
+            error_log($errorMsg);
+            error_log("❌ [CORREOS] Stack trace: " . $e->getTraceAsString());
             $errors[] = $errorMsg;
         }
 
         try {
             // Si hay técnico asignado, también enviarle
             if ($technician && !empty($technician['email'])) {
-                error_log("📧 Intentando enviar correo de cambio de estado al técnico: {$technician['email']}");
-                $this->sendEmail($technician['email'], $subject, $htmlContent);
-                error_log("✅ Correo enviado al técnico: {$technician['email']}");
+                if (!filter_var($technician['email'], FILTER_VALIDATE_EMAIL)) {
+                    $errorMsg = "❌ [CORREOS] Email del técnico inválido para cambio de estado ticket #{$ticket['id']}: " . ($technician['email'] ?? 'NO DEFINIDO');
+                    error_log($errorMsg);
+                    $errors[] = $errorMsg;
+                } else {
+                    error_log("📧 [CORREOS] Intentando enviar correo de cambio de estado al técnico: {$technician['email']} para ticket #{$ticket['id']}");
+                    $this->sendEmail($technician['email'], $subject, $htmlContent);
+                    error_log("✅ [CORREOS] Correo enviado al técnico: {$technician['email']} para ticket #{$ticket['id']}");
+                }
             }
         } catch (\Exception $e) {
-            $errorMsg = "Error enviando correo al técnico {$technician['email']}: " . $e->getMessage();
-            error_log("❌ $errorMsg");
+            $errorMsg = "❌ [CORREOS] Error enviando correo al técnico {$technician['email']} para ticket #{$ticket['id']}: " . $e->getMessage();
+            error_log($errorMsg);
+            error_log("❌ [CORREOS] Stack trace: " . $e->getTraceAsString());
             $errors[] = $errorMsg;
         }
 
         if (empty($errors)) {
-            error_log("✅ Correos de cambio de estado enviados correctamente para ticket #{$ticket['id']}");
+            error_log("✅ [CORREOS] Todos los correos de cambio de estado enviados correctamente para ticket #{$ticket['id']}");
         } else {
-            error_log("⚠️ Algunos correos no se pudieron enviar para ticket #{$ticket['id']}: " . implode('; ', $errors));
+            error_log("⚠️ [CORREOS] Algunos correos no se pudieron enviar para ticket #{$ticket['id']}: " . implode('; ', $errors));
         }
     }
 

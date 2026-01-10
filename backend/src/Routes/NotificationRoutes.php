@@ -205,9 +205,15 @@ class NotificationRoutes
             foreach ($nombresTabla as $nombreTabla) {
                 try {
                     $stmt = $this->db->query(
-                        "SELECT id_notificacion, id_ticket, id_usuario, tipo, mensaje, fecha_envio as fecha_creacion, leida FROM `$nombreTabla` WHERE id_usuario = ? ORDER BY fecha_envio DESC LIMIT 50",
+                        "SELECT id_notificacion, id_ticket, id_usuario, tipo, mensaje, fecha_envio as fecha_creacion, leida 
+                         FROM `$nombreTabla` 
+                         WHERE id_usuario = ? 
+                         ORDER BY fecha_envio DESC 
+                         LIMIT 50",
                         [$userId]
                     );
+                    
+                    error_log("🔍 [NOTIFICACIONES] Consultando tabla '$nombreTabla' para usuario ID: $userId");
                     
                     $notifications = $stmt->fetchAll();
                     $tablaEncontrada = true;
@@ -223,7 +229,20 @@ class NotificationRoutes
                 return;
             }
             
-            AuthMiddleware::sendResponse($notifications);
+            error_log("✅ [NOTIFICACIONES] Devolviendo " . count($notifications) . " notificaciones para usuario ID: $userId");
+            
+            // Validar que todas las notificaciones pertenecen al usuario solicitado
+            $notificacionesValidas = [];
+            foreach ($notifications as $notif) {
+                $notifUserId = isset($notif['id_usuario']) ? (int)$notif['id_usuario'] : 0;
+                if ($notifUserId === $userId) {
+                    $notificacionesValidas[] = $notif;
+                } else {
+                    error_log("🚫 [NOTIFICACIONES] ERROR: Notificación ID {$notif['id_notificacion']} pertenece a usuario $notifUserId, pero se solicitó para $userId");
+                }
+            }
+            
+            AuthMiddleware::sendResponse($notificacionesValidas);
         } catch (\Exception $e) {
             error_log('❌ Error getting notifications by user ID: ' . $e->getMessage());
             AuthMiddleware::sendError('Error interno del servidor', 500);
