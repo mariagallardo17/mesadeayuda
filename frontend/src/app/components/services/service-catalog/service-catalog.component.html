@@ -1,0 +1,533 @@
+<div class="service-catalog-container">
+  <!-- Header -->
+  <div class="catalog-header">
+    <h1>Catálogo de Servicios</h1>
+    <div class="header-actions">
+      <button class="refresh-button" (click)="loadServices()" [disabled]="isLoading">
+        <i class="fas fa-sync-alt" [class.fa-spin]="isLoading"></i>
+        Actualizar
+      </button>
+      <button class="btn btn-primary" (click)="showAddServiceForm()">
+        <span class="btn-icon">➕</span>
+        Nuevo Servicio
+      </button>
+    </div>
+  </div>
+
+  <!-- Search Bar -->
+  <div class="search-container">
+    <div class="search-box">
+      <input
+        type="text"
+        placeholder="Buscar por categoría, subcategoría, tiempo o escalamiento..."
+        [(ngModel)]="searchQuery"
+        (input)="onSearchChange($event)"
+        class="search-input"
+      >
+      <span class="search-icon">🔍</span>
+    </div>
+  </div>
+
+  <!-- Messages -->
+  <div class="messages-container" *ngIf="errorMessage || successMessage">
+    <div class="error-message" *ngIf="errorMessage">
+      <span class="error-icon">❌</span>
+      {{ errorMessage }}
+    </div>
+    <div class="success-message" *ngIf="successMessage">
+      <span class="success-icon">✅</span>
+      {{ successMessage }}
+    </div>
+  </div>
+
+  <!-- Loading State -->
+  <div class="loading-container" *ngIf="isLoading">
+    <div class="spinner"></div>
+    <p>Cargando servicios...</p>
+  </div>
+
+  <!-- Services Table -->
+  <div class="table-container" *ngIf="!isLoading">
+    <div class="table-header">
+      <h3>Servicios Disponibles</h3>
+      <div class="table-actions" *ngIf="selectedService">
+        <button class="btn btn-secondary" (click)="showEditServiceForm(selectedService)">
+          <span class="btn-icon">✏️</span>
+          Editar
+        </button>
+        <button class="btn btn-danger" (click)="deleteService(selectedService)">
+          <span class="btn-icon">🗑️</span>
+          Eliminar
+        </button>
+      </div>
+    </div>
+
+    <div class="table-wrapper">
+      <table class="services-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Categoría</th>
+            <th>Subcategoría</th>
+            <th>Tiempo Objetivo</th>
+            <th>Tiempo Máximo</th>
+            <th>Prioridad</th>
+            <th>Responsable Inicial</th>
+            <th>Escalamiento</th>
+            <th>Motivo de Escalamiento</th>
+            <th>Estado</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            *ngFor="let service of filteredServices; trackBy: trackByServiceId"
+            [class.selected]="selectedService?.id === service.id"
+            [class.inactive]="!service.activo"
+            (click)="selectService(service)"
+          >
+            <td>{{ service.id }}</td>
+            <td>{{ service.categoria }}</td>
+            <td>{{ service.subcategoria }}</td>
+            <td class="time-cell">{{ service.tiempoObjetivo }}</td>
+            <td class="time-cell">{{ service.tiempoMaximo || '-' }}</td>
+            <td>{{ service.prioridad || '-' }}</td>
+            <td>{{ service.responsableInicial || '-' }}</td>
+            <td class="escalation-cell">{{ service.escalamiento }}</td>
+            <td class="escalation-cell">{{ service.motivoEscalamiento || '-' }}</td>
+            <td>
+              <span class="status-badge" [class]="getStatusColor(service.activo)">
+                {{ getStatusLabel(service.activo) }}
+              </span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Empty State -->
+    <div class="empty-state" *ngIf="filteredServices.length === 0">
+      <div class="empty-icon">📋</div>
+      <h3>No se encontraron servicios</h3>
+      <p>No hay servicios que coincidan con tu búsqueda.</p>
+    </div>
+  </div>
+
+  <!-- Modal de Agregar Servicio -->
+  <div class="modal-overlay" *ngIf="showAddForm" (click)="hideForms()">
+    <div class="modal-content service-form-modal" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <h2>Agregar Servicio</h2>
+        <button class="close-btn" (click)="hideForms()">×</button>
+      </div>
+
+    <form [formGroup]="addServiceForm" (ngSubmit)="onSubmitAddService()" class="service-form">
+      <div class="form-group">
+        <label for="add-categoria">Categoría</label>
+        <input
+          type="text"
+          id="add-categoria"
+          formControlName="categoria"
+          class="form-input"
+          [class.error]="addCategoria?.invalid && addCategoria?.touched"
+          placeholder="Seleccione o escriba una categoría"
+          list="add-categorias-list"
+        >
+        <datalist id="add-categorias-list">
+          <option *ngFor="let category of categories" [value]="category">
+            {{ category }}
+          </option>
+        </datalist>
+        <div class="error-message" *ngIf="addCategoria?.invalid && addCategoria?.touched">
+          <span *ngIf="addCategoria?.errors?.['required']">La categoría es requerida</span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="add-subcategoria">Subcategoría</label>
+        <input
+          type="text"
+          id="add-subcategoria"
+          formControlName="subcategoria"
+          class="form-input"
+          [class.error]="addSubcategoria?.invalid && addSubcategoria?.touched"
+          placeholder="Ingrese la subcategoría"
+        >
+        <div class="error-message" *ngIf="addSubcategoria?.invalid && addSubcategoria?.touched">
+          <span *ngIf="addSubcategoria?.errors?.['required']">La subcategoría es requerida</span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="add-tiempo-objetivo">Tiempo Objetivo *</label>
+        <input
+          type="text"
+          id="add-tiempo-objetivo"
+          formControlName="tiempoObjetivo"
+          class="form-input"
+          [class.error]="addTiempoObjetivo?.invalid && addTiempoObjetivo?.touched"
+          placeholder="Ej: 00:30:00 o 30 días"
+        >
+        <div class="error-message" *ngIf="addTiempoObjetivo?.invalid && addTiempoObjetivo?.touched">
+          <span *ngIf="addTiempoObjetivo?.errors?.['required']">El tiempo objetivo es requerido</span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="add-tiempo-objetivo">Tiempo Objetivo</label>
+        <input
+          type="text"
+          id="add-tiempo-objetivo"
+          formControlName="tiempoObjetivo"
+          class="form-input"
+          placeholder="Ej: 00:30:00"
+        >
+      </div>
+
+      <div class="form-group">
+        <label for="add-tiempo-maximo">Tiempo Máximo</label>
+        <input
+          type="text"
+          id="add-tiempo-maximo"
+          formControlName="tiempoMaximo"
+          class="form-input"
+          placeholder="Ej: 00:36:00"
+        >
+      </div>
+
+      <div class="form-group">
+        <label for="add-prioridad">Prioridad</label>
+        <select
+          id="add-prioridad"
+          formControlName="prioridad"
+          class="form-select"
+        >
+          <option value="">Seleccione una prioridad</option>
+          <option value="Baja">Baja</option>
+          <option value="Media">Media</option>
+          <option value="Alta">Alta</option>
+          <option value="Crítica">Crítica</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="add-responsable-inicial">Responsable Inicial</label>
+        <select
+          id="add-responsable-inicial"
+          formControlName="responsableInicial"
+          class="form-select"
+        >
+          <option value="">Seleccione un responsable</option>
+          <option *ngFor="let option of responsableInicialOptions" [value]="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="add-escalamiento">Escalamiento</label>
+        <select
+          id="add-escalamiento"
+          formControlName="escalamiento"
+          class="form-select"
+          [class.error]="addEscalamiento?.invalid && addEscalamiento?.touched"
+        >
+          <option value="">Seleccione un técnico</option>
+          <option *ngFor="let option of escalamientoOptions" [value]="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+        <div class="error-message" *ngIf="addEscalamiento?.invalid && addEscalamiento?.touched">
+          <span *ngIf="addEscalamiento?.errors?.['required']">El escalamiento es requerido</span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="add-motivo-escalamiento">Motivo de Escalamiento</label>
+        <textarea
+          id="add-motivo-escalamiento"
+          formControlName="motivoEscalamiento"
+          class="form-textarea"
+          placeholder="Describa el motivo de escalamiento"
+          rows="2"
+        ></textarea>
+      </div>
+
+      <div class="form-group">
+        <label for="add-nivel-servicio">Nivel de Servicio</label>
+        <input
+          type="text"
+          id="add-nivel-servicio"
+          formControlName="nivelServicio"
+          class="form-input"
+          [class.error]="addNivelServicio?.invalid && addNivelServicio?.touched"
+          placeholder="Ej: CRITICO, MANTENIMIENTO, etc."
+        >
+        <div class="error-message" *ngIf="addNivelServicio?.invalid && addNivelServicio?.touched">
+          <span *ngIf="addNivelServicio?.errors?.['required']">El nivel de servicio es requerido</span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="checkbox-label">
+          <input
+            type="checkbox"
+            formControlName="activo"
+            class="form-checkbox"
+          >
+          <span class="checkmark"></span>
+          Servicio Activo
+        </label>
+      </div>
+
+      <div class="form-group">
+        <label class="checkbox-label">
+          <input
+            type="checkbox"
+            formControlName="requiere_aprobacion"
+            class="form-checkbox"
+          >
+          <span class="checkmark"></span>
+          Requiere archivo de aprobación
+        </label>
+      </div>
+
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary" [disabled]="addServiceForm.invalid || isLoading">
+          <span *ngIf="isLoading" class="spinner-small"></span>
+          Agregar Servicio
+        </button>
+      </div>
+    </form>
+    </div>
+  </div>
+
+  <!-- Modal de Editar Servicio -->
+  <div class="modal-overlay" *ngIf="showEditForm" (click)="hideForms()">
+    <div class="modal-content service-form-modal" (click)="$event.stopPropagation()">
+      <div class="modal-header">
+        <h2>Editar Servicio</h2>
+        <button class="close-btn" (click)="hideForms()">×</button>
+      </div>
+
+    <form [formGroup]="editServiceForm" (ngSubmit)="onSubmitEditService()" class="service-form">
+      <div class="form-group">
+        <label for="edit-categoria">Categoría</label>
+        <input
+          type="text"
+          id="edit-categoria"
+          formControlName="categoria"
+          class="form-input"
+          [class.error]="editCategoria?.invalid && editCategoria?.touched"
+          placeholder="Seleccione o escriba una categoría"
+          list="edit-categorias-list"
+        >
+        <datalist id="edit-categorias-list">
+          <option *ngFor="let category of categories" [value]="category">
+            {{ category }}
+          </option>
+        </datalist>
+        <div class="error-message" *ngIf="editCategoria?.invalid && editCategoria?.touched">
+          <span *ngIf="editCategoria?.errors?.['required']">La categoría es requerida</span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="edit-subcategoria">Subcategoría</label>
+        <input
+          type="text"
+          id="edit-subcategoria"
+          formControlName="subcategoria"
+          class="form-input"
+          [class.error]="editSubcategoria?.invalid && editSubcategoria?.touched"
+          placeholder="Ingrese la subcategoría"
+        >
+        <div class="error-message" *ngIf="editSubcategoria?.invalid && editSubcategoria?.touched">
+          <span *ngIf="editSubcategoria?.errors?.['required']">La subcategoría es requerida</span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="edit-tiempo-objetivo">Tiempo Objetivo *</label>
+        <input
+          type="text"
+          id="edit-tiempo-objetivo"
+          formControlName="tiempoObjetivo"
+          class="form-input"
+          [class.error]="editTiempoObjetivo?.invalid && editTiempoObjetivo?.touched"
+          placeholder="Ej: 00:30:00 o 30 días"
+        >
+        <div class="error-message" *ngIf="editTiempoObjetivo?.invalid && editTiempoObjetivo?.touched">
+          <span *ngIf="editTiempoObjetivo?.errors?.['required']">El tiempo objetivo es requerido</span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="edit-tiempo-maximo">Tiempo Máximo</label>
+        <input
+          type="text"
+          id="edit-tiempo-maximo"
+          formControlName="tiempoMaximo"
+          class="form-input"
+          placeholder="Ej: 00:36:00"
+        >
+      </div>
+
+      <div class="form-group">
+        <label for="edit-prioridad">Prioridad</label>
+        <select
+          id="edit-prioridad"
+          formControlName="prioridad"
+          class="form-select"
+        >
+          <option value="">Seleccione una prioridad</option>
+          <option value="Baja">Baja</option>
+          <option value="Media">Media</option>
+          <option value="Alta">Alta</option>
+          <option value="Crítica">Crítica</option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="edit-responsable-inicial">Responsable Inicial</label>
+        <select
+          id="edit-responsable-inicial"
+          formControlName="responsableInicial"
+          class="form-select"
+        >
+          <option value="">Seleccione un responsable</option>
+          <option *ngFor="let option of responsableInicialOptions" [value]="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+      </div>
+
+      <div class="form-group">
+        <label for="edit-escalamiento">Escalamiento</label>
+        <select
+          id="edit-escalamiento"
+          formControlName="escalamiento"
+          class="form-select"
+          [class.error]="editEscalamiento?.invalid && editEscalamiento?.touched"
+        >
+          <option value="">Seleccione un técnico</option>
+          <option *ngFor="let option of escalamientoOptions" [value]="option.value">
+            {{ option.label }}
+          </option>
+        </select>
+        <div class="error-message" *ngIf="editEscalamiento?.invalid && editEscalamiento?.touched">
+          <span *ngIf="editEscalamiento?.errors?.['required']">El escalamiento es requerido</span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="edit-motivo-escalamiento">Motivo de Escalamiento</label>
+        <textarea
+          id="edit-motivo-escalamiento"
+          formControlName="motivoEscalamiento"
+          class="form-textarea"
+          placeholder="Describa el motivo de escalamiento"
+          rows="2"
+        ></textarea>
+      </div>
+
+      <div class="form-group">
+        <label for="edit-nivel-servicio">Nivel de Servicio</label>
+        <input
+          type="text"
+          id="edit-nivel-servicio"
+          formControlName="nivelServicio"
+          class="form-input"
+          [class.error]="editNivelServicio?.invalid && editNivelServicio?.touched"
+          placeholder="Ej: CRITICO, MANTENIMIENTO, etc."
+        >
+        <div class="error-message" *ngIf="editNivelServicio?.invalid && editNivelServicio?.touched">
+          <span *ngIf="editNivelServicio?.errors?.['required']">El nivel de servicio es requerido</span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="checkbox-label">
+          <input
+            type="checkbox"
+            formControlName="activo"
+            class="form-checkbox"
+          >
+          <span class="checkmark"></span>
+          Servicio Activo
+        </label>
+      </div>
+
+      <div class="form-group">
+        <label class="checkbox-label">
+          <input
+            type="checkbox"
+            formControlName="requiere_aprobacion"
+            class="form-checkbox"
+          >
+          <span class="checkmark"></span>
+          Requiere archivo de aprobación
+        </label>
+      </div>
+
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary" [disabled]="editServiceForm.invalid || isLoading">
+          <span *ngIf="isLoading" class="spinner-small"></span>
+          Actualizar Servicio
+        </button>
+      </div>
+    </form>
+    </div>
+  </div>
+
+  <!-- Modal de éxito -->
+  <div class="modal-overlay success-modal-overlay" *ngIf="showSuccessModal" (click)="closeSuccessModal()">
+    <div class="modal-content success-modal-content" (click)="$event.stopPropagation()">
+      <div class="success-modal-header">
+        <div class="success-icon">✓</div>
+        <h2>¡Éxito!</h2>
+      </div>
+      <div class="success-modal-body">
+        <p>{{ successMessage }}</p>
+      </div>
+      <div class="success-modal-actions">
+        <button class="success-ok-btn" (click)="closeSuccessModal()">Aceptar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de error -->
+  <div class="modal-overlay error-modal-overlay" *ngIf="showErrorModal" (click)="closeErrorModal()">
+    <div class="modal-content error-modal-content" (click)="$event.stopPropagation()">
+      <div class="error-modal-header">
+        <div class="error-icon">✗</div>
+        <h2>Error</h2>
+      </div>
+      <div class="error-modal-body">
+        <p>{{ errorMessage }}</p>
+      </div>
+      <div class="error-modal-actions">
+        <button class="error-ok-btn" (click)="closeErrorModal()">Aceptar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de confirmación -->
+  <div class="modal-overlay confirm-modal-overlay" *ngIf="showConfirmModal" (click)="closeConfirmModal()">
+    <div class="modal-content confirm-modal-content" (click)="$event.stopPropagation()">
+      <div class="confirm-modal-header">
+        <h2>{{ confirmTitle }}</h2>
+        <button class="close-btn" (click)="closeConfirmModal()">×</button>
+      </div>
+      <div class="confirm-modal-body">
+        <p>{{ confirmMessage }}</p>
+      </div>
+      <div class="confirm-modal-actions">
+        <button class="cancel-btn" (click)="closeConfirmModal()">Cancelar</button>
+        <button class="confirm-btn" (click)="confirmActionExecute()" [disabled]="isLoading">
+          <span *ngIf="!isLoading">Aceptar</span>
+          <span *ngIf="isLoading">Procesando...</span>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>

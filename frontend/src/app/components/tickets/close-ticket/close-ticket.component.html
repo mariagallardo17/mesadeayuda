@@ -1,0 +1,242 @@
+<div class="close-ticket-container">
+  <div class="header-section">
+    <h2>Cerrar Ticket</h2>
+    <p>Selecciona un ticket finalizado o cerrado por el sistema para evaluar</p>
+  </div>
+
+  <!-- Lista de tickets finalizados -->
+  <div class="tickets-list-section" *ngIf="!showCloseForm">
+    <div class="tickets-header">
+      <h3>Tickets listos para evaluar</h3>
+      <div class="header-buttons">
+        <button class="refresh-button" (click)="loadFinalizedTickets()" [disabled]="isSearching">
+          <i class="fas fa-sync-alt" [class.fa-spin]="isSearching"></i>
+          Actualizar
+        </button>
+      </div>
+    </div>
+
+    <div class="tickets-table-container" *ngIf="tickets.length > 0; else noTickets">
+      <table class="tickets-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Servicio</th>
+            <th>Descripción</th>
+            <th>Fecha</th>
+            <th>Prioridad</th>
+            <th>Estado</th>
+            <th>Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            *ngFor="let ticket of tickets"
+            class="ticket-row clickable"
+            (click)="selectTicket(ticket)"
+          >
+            <td class="ticket-id">#{{ ticket.id }}</td>
+            <td class="ticket-service">
+              <strong>{{ ticket.categoria }} - {{ ticket.subcategoria }}</strong>
+            </td>
+            <td class="ticket-description">
+              <span class="description-text">{{ ticket.descripcion }}</span>
+            </td>
+            <td class="ticket-date">
+              <i class="fas fa-calendar"></i>
+              <span *ngIf="ticket.fechaCreacion">{{ ticket.fechaCreacion | date:'dd/MM/yyyy' }}</span>
+              <span *ngIf="!ticket.fechaCreacion" class="no-date">-</span>
+            </td>
+            <td class="ticket-priority">
+              <span class="priority-badge" [class]="'priority-' + ticket.prioridad.toLowerCase()">
+                {{ ticket.prioridad }}
+              </span>
+            </td>
+            <td class="ticket-status">
+              <div class="status-container">
+                <span class="status-badge"
+                      [class.status-finished]="ticket.estado === 'Finalizado'"
+                      [class.status-closed-system]="ticket.estado === 'Cerrado' && ticket.evaluacionCierreAutomatico">
+                  {{ getEstadoDisplay(ticket) }}
+                </span>
+                <span class="tipo-cierre-badge"
+                      [class.cierre-usuario]="getTipoCierre(ticket) === 'usuario'"
+                      *ngIf="getTipoCierre(ticket) === 'usuario'">
+                  <i class="fas fa-user"></i>
+                  Pendiente Evaluación
+                </span>
+                <span class="reopened-badge" *ngIf="isReopenedTicket(ticket)">
+                  <i class="fas fa-redo"></i>
+                  Reabierto
+                </span>
+              </div>
+            </td>
+            <td class="ticket-actions">
+              <button
+                class="evaluate-button"
+                (click)="selectTicket(ticket); $event.stopPropagation(); $event.preventDefault();"
+                type="button"
+              >
+                <i class="fas fa-star"></i>
+                Evaluar y Cerrar
+              </button>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+
+    <ng-template #noTickets>
+      <div class="no-tickets-message">
+        <i class="fas fa-inbox"></i>
+        <h3>No hay tickets listos para evaluar</h3>
+        <p>Los tickets aparecerán aquí cuando un técnico los haya finalizado o cuando el sistema los haya cerrado automáticamente.</p>
+        <p class="info-note">
+          <strong>Nota importante:</strong> Los tickets cerrados por el sistema también deben ser evaluados para desbloquear la creación de nuevos tickets.
+        </p>
+      </div>
+    </ng-template>
+  </div>
+
+  <!-- Modal de evaluación del ticket -->
+  <div class="modal-overlay evaluation-modal-overlay" *ngIf="ticketDetails && showCloseForm && !hasEvaluation(ticketDetails)" (click)="resetForm()">
+    <div class="evaluation-modal" (click)="$event.stopPropagation()">
+      <div class="modal-header-evaluation">
+        <h3>Evaluar Ticket #{{ ticketDetails.id }}</h3>
+        <button class="close-button" (click)="resetForm()">×</button>
+      </div>
+
+      <div class="modal-body-evaluation">
+        <!-- Información del ticket -->
+        <div class="ticket-info-compact">
+          <div class="info-item">
+            <strong>Descripción:</strong>
+            <p>{{ ticketDetails.descripcion }}</p>
+          </div>
+          <div class="info-item-row">
+            <span><strong>Creado:</strong> {{ ticketDetails.fechaCreacion | date:'dd/MM/yyyy' }}</span>
+            <span *ngIf="ticketDetails.tecnicoAsignado">
+              <strong>Técnico:</strong> {{ ticketDetails.tecnicoAsignado }}
+            </span>
+              <span>
+              <strong>Estado:</strong>
+              <span class="status-badge-small"
+                    [class.status-finished]="ticketDetails.estado === 'Finalizado'"
+                    [class.status-closed-system]="ticketDetails.estado === 'Cerrado' && ticketDetails.evaluacionCierreAutomatico">
+                {{ getEstadoDisplay(ticketDetails) }}
+              </span>
+              <span class="tipo-cierre-info"
+                    *ngIf="getTipoCierre(ticketDetails) === 'usuario'">
+                <i class="fas fa-user"></i>
+                Pendiente de Evaluación
+              </span>
+              <span class="reopened-info" *ngIf="isReopenedTicket(ticketDetails)">
+                <i class="fas fa-redo"></i>
+                Reabierto
+              </span>
+            </span>
+          </div>
+        </div>
+
+        <!-- Información de evaluación si ya existe -->
+        <div class="ticket-evaluation-info" *ngIf="hasEvaluation(ticketDetails) && ticketDetails.evaluacion">
+          <i class="fas fa-check-circle"></i>
+          <h4>Ticket ya evaluado</h4>
+          <p><strong>Calificación:</strong> {{ ticketDetails.evaluacion.calificacion }}/5</p>
+          <p *ngIf="ticketDetails.evaluacion.comentario"><strong>Comentario:</strong> {{ ticketDetails.evaluacion.comentario }}</p>
+          <p *ngIf="ticketDetails.evaluacion.fechaEvaluacion">
+            <strong>Fecha de evaluación:</strong> {{ ticketDetails.evaluacion.fechaEvaluacion | date:'dd/MM/yyyy HH:mm' }}
+          </p>
+        </div>
+
+        <!-- Formulario de evaluación -->
+        <form [formGroup]="closeForm" class="close-form" *ngIf="!hasEvaluation(ticketDetails)">
+          <div class="rating-section">
+            <label>Calificación del servicio:</label>
+            <div class="stars-container">
+              <span
+                *ngFor="let star of getStars()"
+                class="star"
+                [class]="getStarClass(star)"
+                (click)="setRating(star)"
+                (mouseenter)="onRatingHover(star)"
+                (mouseleave)="onRatingLeave()"
+              >
+                ★
+              </span>
+            </div>
+            <div class="rating-error" *ngIf="closeForm.get('rating')?.invalid && closeForm.get('rating')?.touched">
+              Evaluar el ticket es obligatorio
+            </div>
+          </div>
+
+          <div class="comments-section">
+            <label for="comentarios">Comentarios:</label>
+            <textarea
+              id="comentarios"
+              formControlName="comentarios"
+              placeholder="Escribe tus comentarios sobre el servicio recibido..."
+              rows="2"
+            ></textarea>
+            <div class="field-error" *ngIf="closeForm.get('comentarios')?.invalid && closeForm.get('comentarios')?.touched">
+              Los comentarios son obligatorios
+            </div>
+          </div>
+
+          <div class="modal-actions-evaluation">
+            <button
+              type="button"
+              class="back-button-modal"
+              (click)="resetForm()"
+            >
+              <i class="fas fa-arrow-left"></i>
+              Regresar
+            </button>
+            <button
+              type="button"
+              class="close-ticket-button"
+              (click)="onCloseTicket()"
+              [disabled]="closeForm.invalid || isLoading"
+            >
+              <i class="fas fa-check"></i>
+              Cerrar Ticket
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de éxito -->
+  <div class="modal-overlay" *ngIf="showSuccessModal" (click)="closeSuccessModal()">
+    <div class="success-modal" (click)="$event.stopPropagation()">
+      <div class="modal-header success-header">
+        <h3>✅ Éxito</h3>
+        <button class="close-button" (click)="closeSuccessModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <p>{{ successMessage }}</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-primary" (click)="closeSuccessModal()">Aceptar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal de error -->
+  <div class="modal-overlay" *ngIf="showErrorModal" (click)="closeErrorModal()">
+    <div class="error-modal" (click)="$event.stopPropagation()">
+      <div class="modal-header error-header">
+        <h3>❌ Error</h3>
+        <button class="close-button" (click)="closeErrorModal()">×</button>
+      </div>
+      <div class="modal-body">
+        <p>{{ errorMessage }}</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-primary" (click)="closeErrorModal()">Aceptar</button>
+      </div>
+    </div>
+  </div>
+</div>

@@ -1,0 +1,49 @@
+<header class="app-header" *ngIf="currentUser">
+  <div class="header-content" [class.sidebar-collapsed]="isSidebarCollapsed" [class.sidebar-open]="!isSidebarCollapsed">
+    <!-- Service Desk Title -->
+    <div class="header-left">
+      <button
+        type="button"
+        class="menu-toggle-button"
+        (click)="toggleSidebar()"
+        [attr.aria-expanded]="!isSidebarCollapsed"
+        aria-controls="sidebar-nav"
+        title="Abrir menú de navegación"
+      >
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
+      <h1 class="app-title">{{ currentSection || 'Service Desk' }}</h1>
+    </div>
+
+    <!-- User Profile Section -->
+    <div class="header-right">
+      <!-- Notifications -->
+      <div class="notifications-wrapper">
+        <app-notifications></app-notifications>
+      </div>
+
+      <!-- User Profile Dropdown -->
+      <div class="user-profile-container">
+        <div class="user-profile" (click)="toggleUserMenu()" [class.active]="showUserMenu">
+          <div class="user-info">
+            <span class="user-name">{{ getFullName() }}</span>
+            <span class="user-role">{{ getRoleLabel(currentUser.rol) }}</span>
+          </div>
+          <div class="user-avatar">
+            <span class="user-initials">{{ getUserInitials() }}</span>
+          </div>
+        </div>
+        
+        <!-- Logout Button dentro del mismo contenedor -->
+        <div class="user-menu" *ngIf="showUserMenu" (click)="$event.stopPropagation()">
+          <button class="menu-logout-btn" (click)="logout()">
+            <span class="logout-icon"></span>
+            <span class="logout-text">Cerrar Sesión</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</header>

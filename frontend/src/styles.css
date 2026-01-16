@@ -1,0 +1,45 @@
+/* You can add global styles to this file, and also import other style files */
+
+/* Deshabilitar navegación del navegador */
+body {
+  /* Prevenir selección de texto en elementos de navegación */
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+}
+
+/* Permitir selección de texto en inputs y textareas */
+input, textarea, [contenteditable] {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+  user-select: text;
+}
+
+/* Estilos para prevenir navegación del navegador */
+.no-navigation {
+  /* Prevenir eventos de clic en elementos de navegación */
+  pointer-events: none;
+}
+
+/* Asegurar que el contenido principal sea seleccionable */
+.main-content, .app-container {
+  -webkit-user-select: text;
+  -moz-user-select: text;
+  -ms-user-select: text;
+  user-select: text;
+}
+
+/* Prevenir traducción automática del navegador */
+html, body, app-root, * {
+  translate: no;
+  -webkit-translate: no;
+  -moz-translate: no;
+  -ms-translate: no;
+}
+
+/* Prevenir que los navegadores detecten idioma para traducción */
+html {
+  lang: es;
+}

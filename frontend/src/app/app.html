@@ -1,0 +1,16 @@
+<div class="app-container">
+  <!-- Header global - solo visible cuando el usuario está autenticado y NO está en login -->
+  <app-header *ngIf="isAuthenticated && currentRoute !== '/login'"></app-header>
+  <div class="header-spacer" *ngIf="isAuthenticated && currentRoute !== '/login'"></div>
+
+  <!-- Sidebar global - solo visible cuando el usuario está autenticado y NO está en login -->
+  <app-sidebar-menu *ngIf="isAuthenticated && currentRoute !== '/login'"></app-sidebar-menu>
+
+  <!-- Contenido principal -->
+  <div class="main-content"
+       [class.sidebar-open]="isAuthenticated && currentRoute !== '/login' && !isSidebarCollapsed"
+       [class.sidebar-collapsed]="isAuthenticated && currentRoute !== '/login' && isSidebarCollapsed"
+       [class.with-header]="isAuthenticated && currentRoute !== '/login'">
+    <router-outlet></router-outlet>
+  </div>
+</div>

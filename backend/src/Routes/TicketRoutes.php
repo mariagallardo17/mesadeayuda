@@ -1,0 +1,3837 @@
+<?php
+
+namespace App\Routes;
+
+use App\Config\Database;
+use App\Middleware\AuthMiddleware;
+use App\Services\EmailService;
+use App\Services\NotificationService;
+
+class TicketRoutes
+{
+    private $router;
+    private $db;
+
+    const MIN_DESCRIPTION_LENGTH = 10;
+
+    public function __construct($router)
+    {
+        $this->router = $router;
+        $this->db = Database::getInstance();
+        $this->registerRoutes();
+    }
+
+    private function registerRoutes()
+    {
+        $this->router->addRoute('GET', '/tickets/my-tickets', [$this, 'getMyTickets']);
+        $this->router->addRoute('GET', '/tickets/check-pending-evaluation', [$this, 'checkPendingEvaluation']);
+        $this->router->addRoute('GET', '/tickets/reopened', [$this, 'getReopenedTickets']);
+        $this->router->addRoute('GET', '/tickets/escalados', [$this, 'getEscaladosTickets']);
+        $this->router->addRoute('GET', '/tickets/technicians', [$this, 'getTechnicians']);
+        $this->router->addRoute('GET', '/tickets/:id/evaluation', [$this, 'getEvaluation']);
+        $this->router->addRoute('GET', '/tickets/:ticketId/approval-letter', [$this, 'getApprovalLetter']);
+        $this->router->addRoute('GET', '/tickets/download/:filename', [$this, 'downloadFile']);
+        $this->router->addRoute('GET', '/tickets/:id', [$this, 'getTicketById']);
+        $this->router->addRoute('POST', '/tickets', [$this, 'createTicket']);
+        $this->router->addRoute('POST', '/tickets/:id/escalate', [$this, 'escalateTicket']);
+        $this->router->addRoute('PUT', '/tickets/:id/status', [$this, 'updateTicketStatus']);
+        $this->router->addRoute('PUT', '/tickets/:id/reopen/technician-comment', [$this, 'addTechnicianReopenComment']);
+        $this->router->addRoute('POST', '/tickets/:id/close', [$this, 'closeTicket']);
+        $this->router->addRoute('POST', '/tickets/:id/evaluate', [$this, 'evaluateTicket']);
+    }
+
+    public function getMyTickets()
+    {
+        $user = AuthMiddleware::authenticate();
+
+        // Obtener parámetros de paginación
+        $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
+        $limit = isset($_GET['limit']) ? max(1, min(100, (int)$_GET['limit'])) : 10; // Máximo 100 por página
+        $offset = ($page - 1) * $limit;
+
+        // Parámetro para incluir tickets cerrados (útil para el resumen de tickets)
+        $includeClosed = isset($_GET['includeClosed']) && $_GET['includeClosed'] === 'true';
+        // Parámetro para solo mostrar tickets finalizados sin evaluar (para Cerrar Ticket)
+        $onlyFinalized = isset($_GET['finalizadosSinEvaluar']) && $_GET['finalizadosSinEvaluar'] === 'true';
+
+        error_log('getMyTickets - Usuario: ' . $user['id_usuario'] . ', Rol: ' . ($user['rol'] ?? 'N/A') . ', Page: ' . $page . ', Limit: ' . $limit . ', IncludeClosed: ' . ($includeClosed ? 'true' : 'false') . ', OnlyFinalized: ' . ($onlyFinalized ? 'true' : 'false'));
+
+        try {
+            if ($user['rol'] === 'tecnico' || $user['rol'] === 'administrador') {
+                // OPTIMIZADO: Usar una sola consulta con SQL_CALC_FOUND_ROWS para mejor rendimiento
+                // Para técnicos: mostrar tickets asignados con información del usuario que creó el ticket
+                // EXCLUIR tickets cerrados (ya completados) y escalados
+                // INCLUIR información de evaluaciones y reaperturas
+                $stmt = $this->db->query(
+                    'SELECT SQL_CALC_FOUND_ROWS
+                        t.id_ticket as id,
+                        s.categoria,
+                        s.subcategoria,
+                        t.descripcion,
+                        s.tiempo_objetivo as tiempo_estimado,
+                        s.tiempo_maximo,
+                        t.estatus as estado,
+                        t.prioridad,
+                        t.fecha_creacion,
+                        t.fecha_asignacion,
+                        t.fecha_inicio_atencion,
+                        t.fecha_finalizacion,
+                        t.fecha_cierre,
+                        t.tiempo_atencion_segundos,
+                        t.tiempo_restante_finalizacion,
+                        t.evaluacion_cierre_automatico,
+                        t.pendiente_motivo as pendienteMotivo,
+                        t.pendiente_tiempo_estimado as pendienteTiempoEstimado,
+                        t.pendiente_actualizado_en as pendienteActualizadoEn,
+                        t.archivo_aprobacion as archivoAprobacion,
+                        u.id_usuario as usuario_id,
+                        u.nombre as usuario_nombre,
+                        u.correo as usuario_correo,
+                        u.departamento as usuario_departamento,
+                        t.id_tecnico as tecnico_id,
+                        e.calificacion,
+                        e.comentario as comentario_evaluacion,
+                        e.fecha_evaluacion,
+                        tr.id_reapertura as reapertura_id,
+                        tr.estado_reapertura,
+                        tr.fecha_reapertura,
+                        tr.tecnico_id as reapertura_tecnico_id
+                     FROM tickets t
+                     JOIN servicios s ON t.id_servicio = s.id_servicio
+                     JOIN usuarios u ON t.id_usuario = u.id_usuario
+                     LEFT JOIN (
+                         SELECT e1.id_ticket, e1.calificacion, e1.comentario, e1.fecha_evaluacion
+                         FROM evaluaciones e1
+                         INNER JOIN (
+                             SELECT id_ticket, MAX(fecha_evaluacion) AS max_fecha
+                             FROM evaluaciones
+                             GROUP BY id_ticket
+                         ) latest_eval ON latest_eval.id_ticket = e1.id_ticket AND latest_eval.max_fecha = e1.fecha_evaluacion
+                     ) e ON e.id_ticket = t.id_ticket
+                     LEFT JOIN (
+                         SELECT tr1.*
+                         FROM ticketreaperturas tr1
+                         INNER JOIN (
+                             SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                             FROM ticketreaperturas
+                             GROUP BY id_ticket
+                         ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                     ) tr ON tr.id_ticket = t.id_ticket
+                     WHERE (
+                         t.id_tecnico = ?
+                         OR (tr.id_reapertura IS NOT NULL AND tr.tecnico_id = ? AND t.estatus != "Escalado")
+                     )' .
+                     ($onlyFinalized
+                         ? ' AND (t.estatus = "Finalizado" OR (t.estatus = "Cerrado" AND COALESCE(t.evaluacion_cierre_automatico, 0) = 1) OR (tr.id_reapertura IS NOT NULL AND t.estatus = "Finalizado"))'
+                         : ($includeClosed ? ' AND tr.id_reapertura IS NULL' : ' AND t.estatus != "Cerrado" AND tr.id_reapertura IS NULL')) . '
+                     AND t.estatus != "Escalado"
+                     ORDER BY t.fecha_creacion DESC
+                     LIMIT ? OFFSET ?',
+                    [$user['id_usuario'], $user['id_usuario'], $limit, $offset]
+                );
+
+                // Obtener total usando FOUND_ROWS (más rápido que COUNT separado)
+                // Nota: SQL_CALC_FOUND_ROWS está deprecado en MySQL 8.0.17+, usar COUNT como fallback
+                try {
+                    $stmtTotal = $this->db->query('SELECT FOUND_ROWS() as total');
+                    $totalResult = $stmtTotal->fetch();
+                    $total = (int)($totalResult['total'] ?? 0);
+                } catch (\Exception $e) {
+                    error_log("⚠️ FOUND_ROWS no disponible, usando COUNT: " . $e->getMessage());
+                    $total = 0;
+                }
+
+                // Si FOUND_ROWS no funciona o devuelve 0, hacer COUNT (fallback)
+                if ($total === 0) {
+                    try {
+                        $stmtCount = $this->db->query(
+                            'SELECT COUNT(*) as total
+                             FROM tickets t
+                             LEFT JOIN (
+                                 SELECT tr1.id_ticket, tr1.id_reapertura
+                                 FROM ticketreaperturas tr1
+                                 INNER JOIN (
+                                     SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                                     FROM ticketreaperturas
+                                     GROUP BY id_ticket
+                                 ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                             ) tr ON tr.id_ticket = t.id_ticket
+                             WHERE (
+                                 t.id_tecnico = ?
+                                 OR (tr.id_reapertura IS NOT NULL AND tr.tecnico_id = ? AND t.estatus != "Escalado")
+                             )' .
+                             ($includeClosed ? ' AND tr.id_reapertura IS NULL' : ' AND t.estatus != "Cerrado" AND tr.id_reapertura IS NULL') . '
+                             AND t.estatus != "Escalado"
+                             ',
+                            [$user['id_usuario'], $user['id_usuario']]
+                        );
+                        $total = (int)($stmtCount->fetch()['total'] ?? 0);
+                    } catch (\Exception $e) {
+                        error_log("❌ Error en COUNT fallback: " . $e->getMessage());
+                        $total = count($tickets ?? []); // Fallback final: contar resultados obtenidos
+                    }
+                }
+            } else {
+                // OPTIMIZADO: Para empleados también usar una sola consulta
+                // Para empleados: mostrar sus tickets con información del técnico asignado y del usuario que creó el ticket
+                $stmt = $this->db->query(
+                    'SELECT SQL_CALC_FOUND_ROWS
+                        t.id_ticket as id,
+                        s.categoria,
+                        s.subcategoria,
+                        t.descripcion,
+                        s.tiempo_objetivo as tiempo_estimado,
+                        s.tiempo_maximo,
+                        t.estatus as estado,
+                        t.prioridad,
+                        t.fecha_creacion,
+                        t.fecha_asignacion,
+                        t.fecha_inicio_atencion,
+                        t.fecha_finalizacion,
+                        t.fecha_cierre,
+                        t.tiempo_atencion_segundos,
+                        t.tiempo_restante_finalizacion,
+                        t.id_usuario as usuario_id,
+                        t.id_tecnico as tecnico_id,
+                        u_creador.id_usuario as usuario_id_usuario,
+                        u_creador.nombre as usuario_nombre,
+                        u_creador.correo as usuario_correo,
+                        u_creador.departamento as usuario_departamento,
+                        u.id_usuario as tecnico_id_usuario,
+                        u.nombre as tecnico_nombre,
+                        u.correo as tecnico_correo,
+                        u.departamento as tecnico_departamento,
+                        e.calificacion,
+                        e.comentario as comentario_evaluacion,
+                        e.fecha_evaluacion,
+                        tr.id_reapertura as reapertura_id,
+                        tr.estado_reapertura,
+                        tr.fecha_reapertura,
+                        t.evaluacion_cierre_automatico,
+                        t.pendiente_motivo as pendienteMotivo,
+                        t.pendiente_tiempo_estimado as pendienteTiempoEstimado,
+                        t.pendiente_actualizado_en as pendienteActualizadoEn,
+                        t.archivo_aprobacion as archivoAprobacion
+                     FROM tickets t
+                     JOIN servicios s ON t.id_servicio = s.id_servicio
+                     JOIN usuarios u_creador ON t.id_usuario = u_creador.id_usuario
+                     LEFT JOIN usuarios u ON t.id_tecnico = u.id_usuario
+                     LEFT JOIN (
+                         SELECT e1.id_ticket, e1.calificacion, e1.comentario, e1.fecha_evaluacion
+                         FROM evaluaciones e1
+                         INNER JOIN (
+                             SELECT id_ticket, MAX(fecha_evaluacion) AS max_fecha
+                             FROM evaluaciones
+                             GROUP BY id_ticket
+                         ) latest_eval ON latest_eval.id_ticket = e1.id_ticket AND latest_eval.max_fecha = e1.fecha_evaluacion
+                     ) e ON e.id_ticket = t.id_ticket
+                     LEFT JOIN (
+                         SELECT tr1.*
+                         FROM ticketreaperturas tr1
+                         INNER JOIN (
+                             SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                             FROM ticketreaperturas
+                             GROUP BY id_ticket
+                         ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                     ) tr ON tr.id_ticket = t.id_ticket
+                     WHERE t.id_usuario = ?' .
+                     ($onlyFinalized
+                         // Para Cerrar Ticket: incluir tickets Finalizados o Cerrados con cierre automático
+                         // Los tickets reabiertos que están Finalizados se incluyen automáticamente con t.estatus = "Finalizado"
+                         ? ' AND (t.estatus = "Finalizado" OR (t.estatus = "Cerrado" AND COALESCE(t.evaluacion_cierre_automatico, 0) = 1) OR (tr.id_reapertura IS NOT NULL AND t.estatus = "Finalizado"))'
+                         : ($includeClosed ? '' : ' AND t.estatus != "Cerrado" AND tr.id_reapertura IS NULL')) . '
+                     ORDER BY t.fecha_creacion DESC
+                     LIMIT ? OFFSET ?',
+                    [$user['id_usuario'], $limit, $offset]
+                );
+
+                // Obtener total usando FOUND_ROWS (más rápido que COUNT separado)
+                // Nota: SQL_CALC_FOUND_ROWS está deprecado en MySQL 8.0.17+, usar COUNT como fallback
+                try {
+                    $stmtTotal = $this->db->query('SELECT FOUND_ROWS() as total');
+                    $totalResult = $stmtTotal->fetch();
+                    $total = (int)($totalResult['total'] ?? 0);
+                } catch (\Exception $e) {
+                    error_log("⚠️ FOUND_ROWS no disponible, usando COUNT: " . $e->getMessage());
+                    $total = 0;
+                }
+
+                // Si FOUND_ROWS no funciona o devuelve 0, hacer COUNT (fallback)
+                if ($total === 0) {
+                    try {
+                        $stmtCount = $this->db->query(
+                            'SELECT COUNT(*) as total
+                             FROM tickets t
+                             LEFT JOIN (
+                                 SELECT tr1.id_ticket, tr1.id_reapertura
+                                 FROM ticketreaperturas tr1
+                                 INNER JOIN (
+                                     SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                                     FROM ticketreaperturas
+                                     GROUP BY id_ticket
+                                 ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                             ) tr ON tr.id_ticket = t.id_ticket
+                             WHERE t.id_usuario = ?' .
+                            ($includeClosed ? '' : ' AND t.estatus != "Cerrado" AND tr.id_reapertura IS NULL'),
+                            [$user['id_usuario']]
+                        );
+                        $total = (int)($stmtCount->fetch()['total'] ?? 0);
+                    } catch (\Exception $e) {
+                        error_log("❌ Error en COUNT fallback: " . $e->getMessage());
+                        $total = count($tickets ?? []); // Fallback final: contar resultados obtenidos
+                    }
+                }
+            }
+
+            try {
+                $tickets = $stmt->fetchAll();
+
+                // Validar que se obtuvieron tickets correctamente
+                if ($tickets === false) {
+                    error_log("❌ Error: fetchAll() devolvió false");
+                    $tickets = [];
+                }
+            } catch (\Exception $fetchError) {
+                error_log("❌ Error en fetchAll(): " . $fetchError->getMessage());
+                error_log("❌ Stack trace: " . $fetchError->getTraceAsString());
+                $tickets = [];
+            }
+
+            error_log('📋 Tickets encontrados (raw): ' . count($tickets));
+            error_log('🔍 Modo: Rol=' . ($user['rol'] ?? 'N/A') . ', OnlyFinalized=' . ($onlyFinalized ? 'true' : 'false') . ', IncludeClosed=' . ($includeClosed ? 'true' : 'false') . ', UsuarioId=' . ($user['id_usuario'] ?? 'N/A') . ', TecnicoId=' . ($user['id_usuario'] ?? 'N/A'));
+            if (empty($tickets)) {
+                error_log('⚠️ NO SE ENCONTRARON TICKETS - Verificando consulta SQL...');
+                // Hacer una consulta de prueba para ver qué está pasando
+                $stmtTest = $this->db->query(
+                    'SELECT COUNT(*) as total FROM tickets WHERE id_tecnico = ? AND estatus != "Escalado"',
+                    [$user['id_usuario']]
+                );
+                $testResult = $stmtTest->fetch();
+                error_log('🔍 Total de tickets asignados al técnico (sin filtros): ' . ($testResult['total'] ?? 0));
+
+                // Verificar tickets reabiertos
+                $stmtReabiertos = $this->db->query(
+                    'SELECT COUNT(DISTINCT t.id_ticket) as total
+                     FROM tickets t
+                     LEFT JOIN (
+                         SELECT tr1.*
+                         FROM ticketreaperturas tr1
+                         INNER JOIN (
+                             SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                             FROM ticketreaperturas
+                             GROUP BY id_ticket
+                         ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                     ) tr ON tr.id_ticket = t.id_ticket
+                     WHERE t.id_tecnico = ? AND tr.id_reapertura IS NOT NULL',
+                    [$user['id_usuario']]
+                );
+                $reabiertosResult = $stmtReabiertos->fetch();
+                error_log('🔍 Total de tickets reabiertos del técnico (con misma lógica): ' . ($reabiertosResult['total'] ?? 0));
+            }
+            foreach ($tickets as $t) {
+                $tieneReapertura = !empty($t['reapertura_id']);
+                error_log("  - Ticket #{$t['id']}: Estado={$t['estado']}, Reapertura=" . ($t['reapertura_id'] ?? 'NULL') . ", EstadoReapertura=" . ($t['estado_reapertura'] ?? 'NULL') . ", TecnicoId=" . ($t['tecnico_id'] ?? 'NULL') . ", ReaperturaTecnicoId=" . ($t['reapertura_tecnico_id'] ?? 'NULL') . ", UsuarioId=" . ($t['usuario_id'] ?? 'NULL') . ", TieneReapertura=" . ($tieneReapertura ? 'SÍ' : 'NO'));
+            }
+
+            // Si es onlyFinalized, filtrar tickets reabiertos que ya tienen evaluación después de la reapertura
+            if ($onlyFinalized && !empty($tickets)) {
+                $ticketsFiltrados = [];
+                foreach ($tickets as $ticket) {
+                    error_log("🔍 Procesando ticket #{$ticket['id']} - Estado: {$ticket['estado']}, Reapertura: " . ($ticket['reapertura_id'] ?? 'NULL'));
+
+                    // Si no tiene reapertura, incluir solo si no tiene evaluación
+                    if (empty($ticket['reapertura_id'])) {
+                        if (empty($ticket['comentario_evaluacion'])) {
+                            $ticketsFiltrados[] = $ticket;
+                            error_log("✅ Ticket #{$ticket['id']} incluido (sin reapertura, sin evaluación)");
+                        } else {
+                            error_log("❌ Ticket #{$ticket['id']} excluido (sin reapertura, tiene evaluación)");
+                        }
+                    } else {
+                        // Si tiene reapertura, verificar si tiene evaluación en evaluaciones_reaperturas
+                        try {
+                            $idReapertura = $ticket['reapertura_id'] ?? null;
+
+                            if ($idReapertura) {
+                                // Verificar si existe evaluación para esta reapertura específica en evaluaciones_reaperturas
+                                try {
+                                    $stmtEvalReapertura = $this->db->query(
+                                        'SELECT COUNT(*) as count
+                                         FROM evaluaciones_reaperturas
+                                         WHERE id_reapertura = ?',
+                                        [$idReapertura]
+                                    );
+                                    $evalReaperturaResult = $stmtEvalReapertura->fetch();
+                                    $tieneEvaluacionReapertura = (int)($evalReaperturaResult['count'] ?? 0) > 0;
+
+                                    error_log("🔍 Ticket #{$ticket['id']} reabierto (ID reapertura: $idReapertura) - Estado: {$ticket['estado']}");
+                                    error_log("🔍 Tiene evaluación en evaluaciones_reaperturas: " . ($tieneEvaluacionReapertura ? 'SÍ' : 'NO'));
+
+                                    if (!$tieneEvaluacionReapertura) {
+                                        $ticketsFiltrados[] = $ticket;
+                                        error_log("✅ Ticket #{$ticket['id']} incluido (reabierto, sin evaluación en evaluaciones_reaperturas)");
+                                    } else {
+                                        error_log("❌ Ticket #{$ticket['id']} excluido (reabierto, ya tiene evaluación en evaluaciones_reaperturas)");
+                                    }
+                                } catch (\Exception $e) {
+                                    error_log("⚠️ Error verificando evaluación_reapertura para ticket #{$ticket['id']}: " . $e->getMessage());
+                                    // Si hay error, incluir el ticket por seguridad
+                                    $ticketsFiltrados[] = $ticket;
+                                    error_log("✅ Ticket #{$ticket['id']} incluido (error en verificación, incluido por seguridad)");
+                                }
+                            } else {
+                                // Si no hay ID de reapertura pero el ticket tiene reapertura_id en los datos,
+                                // verificar si tiene evaluación en evaluaciones normal (fallback)
+                                if (empty($ticket['comentario_evaluacion'])) {
+                                    $ticketsFiltrados[] = $ticket;
+                                    error_log("✅ Ticket #{$ticket['id']} incluido (reabierto, sin ID de reapertura pero sin evaluación)");
+                                } else {
+                                    error_log("❌ Ticket #{$ticket['id']} excluido (reabierto, sin ID de reapertura pero con evaluación)");
+                                }
+                            }
+                        } catch (\Exception $e) {
+                            error_log("❌ Error verificando evaluación de reapertura para ticket {$ticket['id']}: " . $e->getMessage());
+                            error_log("❌ Stack trace: " . $e->getTraceAsString());
+                            // Por seguridad, incluir el ticket si no tiene evaluación visible
+                            if (empty($ticket['comentario_evaluacion'])) {
+                                $ticketsFiltrados[] = $ticket;
+                                error_log("✅ Ticket #{$ticket['id']} incluido (error en verificación, sin evaluación visible, incluido por seguridad)");
+                            } else {
+                                error_log("❌ Ticket #{$ticket['id']} excluido (error en verificación pero tiene evaluación visible)");
+                            }
+                        }
+                    }
+                }
+                $tickets = $ticketsFiltrados;
+                error_log('📊 Tickets filtrados (onlyFinalized): ' . count($tickets) . ' de ' . count($ticketsFiltrados) . ' procesados');
+            }
+
+            // Si no hay tickets, devolver respuesta con estructura correcta
+            if (empty($tickets)) {
+                error_log('No hay tickets para el usuario: ' . $user['id_usuario'] . ' (rol: ' . $user['rol'] . ')');
+                AuthMiddleware::sendResponse([
+                    'tickets' => [],
+                    'pagination' => [
+                        'total' => 0,
+                        'page' => $page,
+                        'limit' => $limit,
+                        'totalPages' => 0,
+                        'startItem' => 0,
+                        'endItem' => 0,
+                        'hasNextPage' => false,
+                        'hasPrevPage' => false
+                    ]
+                ]);
+                return;
+            }
+
+            // Formatear datos para el frontend
+            $formattedTickets = [];
+            foreach ($tickets as $ticket) {
+                try {
+                    // Convertir snake_case a camelCase y estructurar datos
+                    $formattedTicket = [
+                        'id' => isset($ticket['id']) ? (int)$ticket['id'] : null,
+                        'categoria' => $ticket['categoria'] ?? '',
+                        'subcategoria' => $ticket['subcategoria'] ?? '',
+                        'descripcion' => $ticket['descripcion'] ?? '',
+                        'tiempoEstimado' => $ticket['tiempo_estimado'] ?? null,
+                        'tiempoObjetivo' => $ticket['tiempo_estimado'] ?? null,
+                        'tiempoMaximo' => $ticket['tiempo_maximo'] ?? null,
+                        // Lógica de estado para tickets reabiertos:
+                        // - Si onlyFinalized=true (Cerrar Ticket): mostrar estado ACTUAL "Finalizado" para tickets reabiertos finalizados
+                        // - Si onlyFinalized=false (Mis Tickets / Seguimiento): NO deberían aparecer aquí (se excluyen con tr.id_reapertura IS NULL)
+                        // - En "Tickets Reabiertos" mostrarán el estado actual porque viene de getReopenedTickets
+                        'estado' => (!empty($ticket['reapertura_id']) && $onlyFinalized)
+                            ? ($ticket['estado'] ?? 'Pendiente')  // Para Cerrar Ticket, mostrar estado actual
+                            : ($ticket['estado'] ?? 'Pendiente'),  // Para otros casos (aunque no deberían aparecer reabiertos aquí)
+                        'prioridad' => $ticket['prioridad'] ?? 'Media',
+                        'fechaCreacion' => $ticket['fecha_creacion'] ?? null,
+                        'fechaAsignacion' => $ticket['fecha_asignacion'] ?? null,
+                        'fechaInicioAtencion' => $ticket['fecha_inicio_atencion'] ?? null,
+                        'fechaFinalizacion' => $ticket['fecha_finalizacion'] ?? null,
+                        'fechaCierre' => $ticket['fecha_cierre'] ?? null,
+                        'tiempoAtencionSegundos' => isset($ticket['tiempo_atencion_segundos']) ? (int)$ticket['tiempo_atencion_segundos'] : null,
+                        'tiempoRestanteFinalizacion' => isset($ticket['tiempo_restante_finalizacion']) ? (int)$ticket['tiempo_restante_finalizacion'] : null,
+                        'usuarioId' => isset($ticket['usuario_id']) ? (int)$ticket['usuario_id'] : null,
+                        'tecnicoId' => isset($ticket['tecnico_id']) ? (int)$ticket['tecnico_id'] : null,
+                        'archivoAprobacion' => $ticket['archivoAprobacion'] ?? $ticket['archivo_aprobacion'] ?? null,
+                        'pendienteMotivo' => $ticket['pendienteMotivo'] ?? $ticket['pendiente_motivo'] ?? null,
+                        'pendienteTiempoEstimado' => $ticket['pendienteTiempoEstimado'] ?? $ticket['pendiente_tiempo_estimado'] ?? null,
+                        'pendienteActualizadoEn' => $ticket['pendienteActualizadoEn'] ?? $ticket['pendiente_actualizado_en'] ?? null,
+                    ];
+
+                    // Agrupar datos del usuario en objeto usuario
+                    if (!empty($ticket['usuario_nombre'])) {
+                        $formattedTicket['usuario'] = [
+                            'id' => isset($ticket['usuario_id']) ? (int)$ticket['usuario_id'] : null,
+                            'nombre' => $ticket['usuario_nombre'] ?? '',
+                            'correo' => $ticket['usuario_correo'] ?? '',
+                            'departamento' => $ticket['usuario_departamento'] ?? null
+                        ];
+                    }
+
+                    // Agrupar datos del técnico si existen (para empleados)
+                    if (!empty($ticket['tecnico_nombre'])) {
+                        $formattedTicket['tecnico'] = [
+                            'id' => isset($ticket['tecnico_id_usuario']) ? (int)$ticket['tecnico_id_usuario'] : null,
+                            'nombre' => $ticket['tecnico_nombre'] ?? '',
+                            'correo' => $ticket['tecnico_correo'] ?? '',
+                            'departamento' => $ticket['tecnico_departamento'] ?? null
+                        ];
+                        $formattedTicket['tecnicoAsignado'] = $ticket['tecnico_nombre'] ?? null;
+                    } else if (!empty($ticket['tecnico_id'])) {
+                        // Si hay técnico asignado pero no tenemos el nombre, al menos devolver el ID
+                        $formattedTicket['tecnicoAsignado'] = 'Técnico asignado';
+                        $formattedTicket['tecnicoId'] = (int)$ticket['tecnico_id'];
+                    }
+
+                    // Asegurar que el estado siempre esté presente
+                    if (empty($formattedTicket['estado'])) {
+                        $formattedTicket['estado'] = 'Pendiente';
+                    }
+
+                    // Agregar información de evaluación si existe
+                    if (!empty($ticket['calificacion'])) {
+                        $formattedTicket['evaluacion'] = [
+                            'calificacion' => (int)$ticket['calificacion'],
+                            'comentario' => $ticket['comentario_evaluacion'] ?? null,
+                            'fechaEvaluacion' => $ticket['fecha_evaluacion'] ?? null
+                        ];
+                    } else {
+                        $formattedTicket['evaluacion'] = null;
+                    }
+
+                    // Agregar información de reapertura si existe
+                    if (!empty($ticket['reapertura_id'])) {
+                        $formattedTicket['reapertura'] = [
+                            'id' => (int)$ticket['reapertura_id'],
+                            'observacionesUsuario' => null, // No disponible en esta consulta
+                            'causaTecnico' => null, // No disponible en esta consulta
+                            'fechaReapertura' => $ticket['fecha_reapertura'] ?? null,
+                            'fechaRespuestaTecnico' => null, // No disponible en esta consulta
+                            'estadoReapertura' => $ticket['estado_reapertura'] ?? null
+                        ];
+                        $formattedTicket['mostrarEstadoReabierto'] = true;
+                        error_log("✅ Ticket #{$ticket['id']} tiene reapertura - ID: {$ticket['reapertura_id']}, Estado: {$ticket['estado_reapertura']}");
+                    } else {
+                        $formattedTicket['reapertura'] = null;
+                        $formattedTicket['mostrarEstadoReabierto'] = false;
+                    }
+
+                    // Agregar información de evaluación de cierre automático
+                    $formattedTicket['evaluacionCierreAutomatico'] = !empty($ticket['evaluacion_cierre_automatico']) && $ticket['evaluacion_cierre_automatico'] == 1;
+
+                    // Formatear tiempo de atención para mejor legibilidad
+                    if (!empty($ticket['tiempo_atencion_segundos'])) {
+                        $segundos = (int)$ticket['tiempo_atencion_segundos'];
+                        $horas = floor($segundos / 3600);
+                        $minutos = floor(($segundos % 3600) / 60);
+                        $formattedTicket['tiempoAtencionFormateado'] = sprintf('%02d:%02d:%02d', $horas, $minutos, $segundos % 60);
+                    } else {
+                        $formattedTicket['tiempoAtencionFormateado'] = null;
+                    }
+
+                    $formattedTickets[] = $formattedTicket;
+                } catch (\Exception $e) {
+                    error_log('Error formateando ticket: ' . $e->getMessage());
+                    error_log('Ticket data: ' . json_encode($ticket));
+                    error_log('Stack trace: ' . $e->getTraceAsString());
+                    // Continuar con el siguiente ticket en lugar de fallar completamente
+                    continue;
+                }
+            }
+
+            error_log('Tickets formateados: ' . count($formattedTickets));
+            error_log('Primer ticket formateado: ' . json_encode($formattedTickets[0] ?? 'N/A'));
+
+            // Calcular información de paginación
+            $totalPages = ceil($total / $limit);
+            $startItem = $total > 0 ? $offset + 1 : 0;
+            $endItem = min($offset + $limit, $total);
+
+            // Devolver respuesta con paginación
+            AuthMiddleware::sendResponse([
+                'tickets' => $formattedTickets,
+                'pagination' => [
+                    'total' => $total,
+                    'page' => $page,
+                    'limit' => $limit,
+                    'totalPages' => $totalPages,
+                    'startItem' => $startItem,
+                    'endItem' => $endItem,
+                    'hasNextPage' => $page < $totalPages,
+                    'hasPrevPage' => $page > 1
+                ]
+            ]);
+        } catch (\Exception $e) {
+            error_log('Error getting tickets: ' . $e->getMessage());
+            error_log('Stack trace: ' . $e->getTraceAsString());
+            error_log('File: ' . $e->getFile() . ' Line: ' . $e->getLine());
+            AuthMiddleware::sendError('Error interno del servidor: ' . $e->getMessage(), 500);
+        }
+    }
+
+    public function checkPendingEvaluation()
+    {
+        $user = AuthMiddleware::authenticate();
+
+        try {
+            // Verificar tickets normales finalizados sin evaluación
+            $stmt = $this->db->query(
+                'SELECT COUNT(*) as count FROM tickets t
+                 LEFT JOIN evaluaciones e ON e.id_ticket = t.id_ticket
+                 LEFT JOIN (
+                     SELECT tr1.id_ticket, tr1.id_reapertura
+                     FROM ticketreaperturas tr1
+                     INNER JOIN (
+                         SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                         FROM ticketreaperturas
+                         GROUP BY id_ticket
+                     ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                 ) tr ON tr.id_ticket = t.id_ticket
+                 LEFT JOIN evaluaciones_reaperturas er ON tr.id_reapertura = er.id_reapertura
+                 WHERE t.id_usuario = ?
+                   AND (
+                     (tr.id_reapertura IS NULL AND e.id_evaluacion IS NULL)
+                     OR (tr.id_reapertura IS NOT NULL AND er.id_evaluacion_reapertura IS NULL)
+                   )
+                   AND (t.estatus = "Finalizado" OR (t.estatus = "Cerrado" AND COALESCE(t.evaluacion_cierre_automatico, 0) = 1) OR (tr.id_reapertura IS NOT NULL AND t.estatus = "Finalizado"))
+                   AND COALESCE(t.fecha_finalizacion, t.fecha_cierre) IS NOT NULL',
+                [$user['id_usuario']]
+            );
+
+            $result = $stmt->fetch();
+            $hasPending = $result['count'] > 0;
+
+            AuthMiddleware::sendResponse(['hasPending' => $hasPending]);
+        } catch (\Exception $e) {
+            error_log('Error checking pending evaluations: ' . $e->getMessage());
+            // Fallback: verificar solo tickets normales si falla la consulta con reaperturas
+            try {
+                $stmt = $this->db->query(
+                    'SELECT COUNT(*) as count FROM tickets t
+                     LEFT JOIN evaluaciones e ON e.id_ticket = t.id_ticket
+                     WHERE t.id_usuario = ? AND e.id_evaluacion IS NULL
+                       AND (t.estatus = "Finalizado" OR (t.estatus = "Cerrado" AND COALESCE(t.evaluacion_cierre_automatico, 0) = 1))
+                       AND COALESCE(t.fecha_finalizacion, t.fecha_cierre) IS NOT NULL',
+                    [$user['id_usuario']]
+                );
+                $result = $stmt->fetch();
+                $hasPending = $result['count'] > 0;
+                AuthMiddleware::sendResponse(['hasPending' => $hasPending]);
+            } catch (\Exception $e2) {
+                error_log('Error en fallback checking pending evaluations: ' . $e2->getMessage());
+                AuthMiddleware::sendError('Error interno del servidor', 500);
+            }
+        }
+    }
+
+    public function getTicketById($id)
+    {
+        $user = AuthMiddleware::authenticate();
+
+        try {
+            // Obtener información completa del ticket (similar a getMyTickets)
+            $stmt = $this->db->query(
+                'SELECT
+                    t.id_ticket as id,
+                    s.categoria,
+                    s.subcategoria,
+                    t.descripcion,
+                    s.tiempo_objetivo as tiempo_estimado,
+                    s.tiempo_maximo,
+                    t.estatus as estado,
+                    t.prioridad,
+                    t.fecha_creacion,
+                    t.fecha_asignacion,
+                    t.fecha_inicio_atencion,
+                    t.fecha_finalizacion,
+                    t.fecha_cierre,
+                    t.tiempo_atencion_segundos,
+                    t.tiempo_restante_finalizacion,
+                    t.id_usuario as usuario_id,
+                    t.id_tecnico as tecnico_id,
+                    t.id_servicio as servicio_id,
+                    t.evaluacion_cierre_automatico,
+                    t.archivo_aprobacion,
+                    t.pendiente_motivo,
+                    t.pendiente_tiempo_estimado,
+                    t.pendiente_actualizado_en,
+                    u.id_usuario as usuario_id_usuario,
+                    u.nombre as usuario_nombre,
+                    u.correo as usuario_correo,
+                    u.departamento as usuario_departamento,
+                    tec.id_usuario as tecnico_id_usuario,
+                    tec.nombre as tecnico_nombre,
+                    tec.correo as tecnico_correo,
+                    tec.departamento as tecnico_departamento,
+                    e.calificacion,
+                    e.comentario as comentario_evaluacion,
+                    e.fecha_evaluacion,
+                    tr.id_reapertura as reapertura_id,
+                    tr.estado_reapertura,
+                    tr.fecha_reapertura,
+                    tr.observaciones_usuario as reapertura_observaciones_usuario,
+                    tr.causa_tecnico as reapertura_causa_tecnico,
+                    tr.fecha_respuesta_tecnico as reapertura_fecha_respuesta_tecnico
+                 FROM tickets t
+                 JOIN servicios s ON t.id_servicio = s.id_servicio
+                 JOIN usuarios u ON t.id_usuario = u.id_usuario
+                 LEFT JOIN usuarios tec ON t.id_tecnico = tec.id_usuario
+                 LEFT JOIN (
+                     SELECT e1.id_ticket, e1.calificacion, e1.comentario, e1.fecha_evaluacion
+                     FROM evaluaciones e1
+                     INNER JOIN (
+                         SELECT id_ticket, MAX(fecha_evaluacion) AS max_fecha
+                         FROM evaluaciones
+                         GROUP BY id_ticket
+                     ) latest_eval ON latest_eval.id_ticket = e1.id_ticket AND latest_eval.max_fecha = e1.fecha_evaluacion
+                 ) e ON e.id_ticket = t.id_ticket
+                 LEFT JOIN (
+                     SELECT tr1.*
+                     FROM ticketreaperturas tr1
+                     INNER JOIN (
+                         SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                         FROM ticketreaperturas
+                         GROUP BY id_ticket
+                     ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                 ) tr ON tr.id_ticket = t.id_ticket
+                 WHERE t.id_ticket = ? AND (t.id_usuario = ? OR t.id_tecnico = ?)',
+                [$id, $user['id_usuario'], $user['id_usuario']]
+            );
+
+            $ticket = $stmt->fetch();
+
+            if (!$ticket) {
+                AuthMiddleware::sendError('Ticket no encontrado', 404);
+                return;
+            }
+
+            // Formatear datos para el frontend (mismo formato que getMyTickets)
+            $formattedTicket = [
+                'id' => $ticket['id'],
+                'categoria' => $ticket['categoria'],
+                'subcategoria' => $ticket['subcategoria'],
+                'descripcion' => $ticket['descripcion'],
+                'tiempoEstimado' => $ticket['tiempo_estimado'] ?? null,
+                'tiempoObjetivo' => $ticket['tiempo_estimado'] ?? null,
+                'tiempoMaximo' => $ticket['tiempo_maximo'] ?? null,
+                'estado' => $ticket['estado'],
+                'prioridad' => $ticket['prioridad'],
+                'fechaCreacion' => $ticket['fecha_creacion'] ?? null,
+                'fechaAsignacion' => $ticket['fecha_asignacion'] ?? null,
+                'fechaInicioAtencion' => $ticket['fecha_inicio_atencion'] ?? null,
+                'fechaFinalizacion' => $ticket['fecha_finalizacion'] ?? null,
+                'fechaCierre' => $ticket['fecha_cierre'] ?? null,
+                'tiempoAtencionSegundos' => $ticket['tiempo_atencion_segundos'] ?? null,
+                'tiempoRestanteFinalizacion' => $ticket['tiempo_restante_finalizacion'] ?? null,
+                'usuarioId' => $ticket['usuario_id'] ?? null,
+                'tecnicoId' => $ticket['tecnico_id'] ?? null,
+                'servicioId' => $ticket['servicio_id'] ?? null,
+                'archivoAprobacion' => $ticket['archivo_aprobacion'] ?? null,
+                'pendienteMotivo' => $ticket['pendiente_motivo'] ?? null,
+                'pendienteTiempoEstimado' => $ticket['pendiente_tiempo_estimado'] ?? null,
+                'pendienteActualizadoEn' => $ticket['pendiente_actualizado_en'] ?? null,
+            ];
+
+            // Agrupar datos del usuario en objeto usuario
+            if (!empty($ticket['usuario_nombre'])) {
+                $formattedTicket['usuario'] = [
+                    'id' => $ticket['usuario_id_usuario'] ?? null,
+                    'nombre' => $ticket['usuario_nombre'] ?? null,
+                    'correo' => $ticket['usuario_correo'] ?? null,
+                    'departamento' => $ticket['usuario_departamento'] ?? null
+                ];
+            }
+
+            // Agrupar datos del técnico si existen
+            if (!empty($ticket['tecnico_nombre'])) {
+                $formattedTicket['tecnico'] = [
+                    'id' => $ticket['tecnico_id_usuario'] ?? null,
+                    'nombre' => $ticket['tecnico_nombre'] ?? null,
+                    'correo' => $ticket['tecnico_correo'] ?? null,
+                    'departamento' => $ticket['tecnico_departamento'] ?? null
+                ];
+                $formattedTicket['tecnicoAsignado'] = $ticket['tecnico_nombre'] ?? null;
+            }
+
+            // Agregar información de reapertura si existe (primero para poder usarla en la lógica de evaluación)
+            if (!empty($ticket['reapertura_id'])) {
+                $formattedTicket['reapertura'] = [
+                    'id' => (int)$ticket['reapertura_id'],
+                    'observacionesUsuario' => $ticket['reapertura_observaciones_usuario'] ?? null,
+                    'causaTecnico' => $ticket['reapertura_causa_tecnico'] ?? null,
+                    'fechaReapertura' => $ticket['fecha_reapertura'] ?? null,
+                    'fechaRespuestaTecnico' => $ticket['reapertura_fecha_respuesta_tecnico'] ?? null,
+                    'estadoReapertura' => $ticket['estado_reapertura'] ?? null
+                ];
+                $formattedTicket['mostrarEstadoReabierto'] = true;
+            } else {
+                $formattedTicket['reapertura'] = null;
+                $formattedTicket['mostrarEstadoReabierto'] = false;
+            }
+
+            // Agregar información de evaluación si existe
+            // IMPORTANTE: Para tickets reabiertos, buscar evaluación en evaluaciones_reaperturas
+            if (!empty($formattedTicket['reapertura']['id'])) {
+                // Ticket reabierto: buscar evaluación en evaluaciones_reaperturas
+                $idReapertura = $formattedTicket['reapertura']['id'];
+                $stmtEvalReapertura = $this->db->query(
+                    'SELECT calificacion, comentario, fecha_evaluacion
+                     FROM evaluaciones_reaperturas
+                     WHERE id_reapertura = ?
+                     LIMIT 1',
+                    [$idReapertura]
+                );
+                $evalReapertura = $stmtEvalReapertura->fetch();
+
+                if ($evalReapertura && !empty($evalReapertura['calificacion'])) {
+                    $formattedTicket['evaluacion'] = [
+                        'calificacion' => (int)$evalReapertura['calificacion'],
+                        'comentario' => $evalReapertura['comentario'] ?? null,
+                        'fechaEvaluacion' => $evalReapertura['fecha_evaluacion'] ?? null
+                    ];
+                    error_log("🔍 Ticket #{$ticket['id']} reabierto - Evaluación encontrada en evaluaciones_reaperturas");
+                } else {
+                    $formattedTicket['evaluacion'] = null;
+                    error_log("🔍 Ticket #{$ticket['id']} reabierto - Sin evaluación en evaluaciones_reaperturas");
+                }
+            } else {
+                // Ticket normal: buscar evaluación en evaluaciones normal
+                if (!empty($ticket['calificacion'])) {
+                    $formattedTicket['evaluacion'] = [
+                        'calificacion' => (int)$ticket['calificacion'],
+                        'comentario' => $ticket['comentario_evaluacion'] ?? null,
+                        'fechaEvaluacion' => $ticket['fecha_evaluacion'] ?? null
+                    ];
+                } else {
+                    $formattedTicket['evaluacion'] = null;
+                }
+            }
+
+            // Agregar información de evaluación de cierre automático
+            $formattedTicket['evaluacionCierreAutomatico'] = !empty($ticket['evaluacion_cierre_automatico']) && $ticket['evaluacion_cierre_automatico'] == 1;
+
+            // Formatear tiempo de atención si existe
+            if (!empty($ticket['tiempo_atencion_segundos'])) {
+                $segundos = (int)$ticket['tiempo_atencion_segundos'];
+                $horas = floor($segundos / 3600);
+                $minutos = floor(($segundos % 3600) / 60);
+                $formattedTicket['tiempoAtencionFormateado'] = sprintf('%02d:%02d:%02d', $horas, $minutos, $segundos % 60);
+            } else {
+                $formattedTicket['tiempoAtencionFormateado'] = null;
+            }
+
+            AuthMiddleware::sendResponse($formattedTicket);
+        } catch (\Exception $e) {
+            error_log('Error getting ticket: ' . $e->getMessage());
+            AuthMiddleware::sendError('Error interno del servidor', 500);
+        }
+    }
+
+    public function createTicket()
+    {
+        $user = AuthMiddleware::authenticate();
+
+        // Leer datos de FormData (multipart/form-data) o JSON
+        // Si es FormData, los datos vienen en $_POST, si es JSON viene en php://input
+        $contentType = $_SERVER['CONTENT_TYPE'] ?? '';
+
+        if (strpos($contentType, 'multipart/form-data') !== false) {
+            // FormData - leer de $_POST
+            $categoria = trim($_POST['categoria'] ?? '');
+            $subcategoria = trim($_POST['subcategoria'] ?? '');
+            $descripcion = trim($_POST['descripcion'] ?? '');
+            $archivoAprobacion = $_FILES['archivoAprobacion'] ?? null;
+            error_log("📋 Datos recibidos desde FormData: categoria=$categoria, subcategoria=$subcategoria, descripcion=" . substr($descripcion, 0, 50) . "...");
+        } else {
+            // JSON - leer de php://input
+            $body = AuthMiddleware::getRequestBody();
+        $categoria = trim($body['categoria'] ?? '');
+        $subcategoria = trim($body['subcategoria'] ?? '');
+        $descripcion = trim($body['descripcion'] ?? '');
+            $archivoAprobacion = null;
+            error_log("📋 Datos recibidos desde JSON: categoria=$categoria, subcategoria=$subcategoria, descripcion=" . substr($descripcion, 0, 50) . "...");
+        }
+
+        // Validar campos obligatorios
+        if (empty($categoria) || empty($subcategoria) || empty($descripcion)) {
+            error_log("❌ Campos faltantes: categoria=" . (empty($categoria) ? 'VACÍO' : 'OK') . ", subcategoria=" . (empty($subcategoria) ? 'VACÍO' : 'OK') . ", descripcion=" . (empty($descripcion) ? 'VACÍO' : 'OK'));
+            AuthMiddleware::sendError('Todos los campos obligatorios deben ser completados', 400);
+        }
+
+        if (strlen($descripcion) < self::MIN_DESCRIPTION_LENGTH) {
+            AuthMiddleware::sendError('La descripción debe tener al menos ' . self::MIN_DESCRIPTION_LENGTH . ' caracteres', 400);
+        }
+
+        // Verificar si el usuario tiene evaluaciones pendientes antes de permitir un nuevo ticket
+        try {
+            $stmtPendientes = $this->db->query(
+                'SELECT COUNT(*) as count FROM tickets t
+                 LEFT JOIN evaluaciones e ON e.id_ticket = t.id_ticket
+                 LEFT JOIN (
+                     SELECT tr1.id_ticket, tr1.id_reapertura
+                     FROM ticketreaperturas tr1
+                     INNER JOIN (
+                         SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                         FROM ticketreaperturas
+                         GROUP BY id_ticket
+                     ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                 ) tr ON tr.id_ticket = t.id_ticket
+                 LEFT JOIN evaluaciones_reaperturas er ON tr.id_reapertura = er.id_reapertura
+                 WHERE t.id_usuario = ?
+                   AND (
+                     (tr.id_reapertura IS NULL AND e.id_evaluacion IS NULL)
+                     OR (tr.id_reapertura IS NOT NULL AND er.id_evaluacion_reapertura IS NULL)
+                   )
+                   AND (t.estatus = "Finalizado" OR (t.estatus = "Cerrado" AND COALESCE(t.evaluacion_cierre_automatico, 0) = 1) OR (tr.id_reapertura IS NOT NULL AND t.estatus = "Finalizado"))
+                   AND COALESCE(t.fecha_finalizacion, t.fecha_cierre) IS NOT NULL',
+                [$user['id_usuario']]
+            );
+            $resultPendientes = $stmtPendientes->fetch();
+            if ($resultPendientes['count'] > 0) {
+                AuthMiddleware::sendError('Tienes tickets pendientes de evaluación. Por favor, evalúa tus tickets en el menú "Cerrar Ticket" antes de crear uno nuevo.', 409);
+                return;
+            }
+        } catch (\Exception $e) {
+            error_log('⚠️ Error verificando tickets pendientes en createTicket: ' . $e->getMessage());
+            // Fallback: verificar solo tickets normales si falla la consulta con reaperturas
+            try {
+                $stmtPendientes = $this->db->query(
+                    'SELECT COUNT(*) as count FROM tickets t
+                     LEFT JOIN evaluaciones e ON e.id_ticket = t.id_ticket
+                     WHERE t.id_usuario = ? AND e.id_evaluacion IS NULL
+                       AND (t.estatus = "Finalizado" OR (t.estatus = "Cerrado" AND COALESCE(t.evaluacion_cierre_automatico, 0) = 1))
+                       AND COALESCE(t.fecha_finalizacion, t.fecha_cierre) IS NOT NULL',
+                    [$user['id_usuario']]
+                );
+                $resultPendientes = $stmtPendientes->fetch();
+                if ($resultPendientes['count'] > 0) {
+                    AuthMiddleware::sendError('Tienes tickets pendientes de evaluación. Por favor, evalúa tus tickets en el menú "Cerrar Ticket" antes de crear uno nuevo.', 409);
+                    return;
+                }
+            } catch (\Exception $e2) {
+                error_log('⚠️ Error en fallback verificando tickets pendientes en createTicket: ' . $e2->getMessage());
+                // Continuar con la creación del ticket si hay error (no bloquear)
+            }
+        }
+
+        try {
+            // Get service - Intentar con diferentes nombres de tabla
+            $servicio = null;
+
+            // Intentar con "servicios" (minúscula)
+            try {
+                $stmt = $this->db->query(
+                    'SELECT id_servicio, tiempo_objetivo, tiempo_maximo, prioridad, requiere_aprobacion FROM servicios
+                     WHERE categoria = ? AND subcategoria = ? AND estatus = "Activo"',
+                    [$categoria, $subcategoria]
+                );
+                $servicio = $stmt->fetch();
+            } catch (\Exception $e) {
+                error_log("⚠️ Error con tabla 'servicios': " . $e->getMessage());
+            }
+
+            // Si no funcionó, intentar con "Servicios" (mayúscula)
+            if (!$servicio) {
+                try {
+                    $stmt = $this->db->query(
+                        'SELECT id_servicio, tiempo_objetivo, tiempo_maximo, prioridad, requiere_aprobacion FROM Servicios
+                         WHERE categoria = ? AND subcategoria = ? AND estatus = "Activo"',
+                        [$categoria, $subcategoria]
+                    );
+                    $servicio = $stmt->fetch();
+                } catch (\Exception $e) {
+                    error_log("⚠️ Error con tabla 'Servicios': " . $e->getMessage());
+                }
+            }
+
+            if (!$servicio) {
+                error_log("❌ Servicio no encontrado: categoria=$categoria, subcategoria=$subcategoria");
+                AuthMiddleware::sendError('Servicio no encontrado. Verifica que la categoría y subcategoría sean correctas.', 404);
+            }
+
+            $prioridad = $servicio['prioridad'] ?? 'Media';
+            $requiereAprobacion = ($servicio['requiere_aprobacion'] == 1 || $servicio['requiere_aprobacion'] === true || $servicio['requiere_aprobacion'] === '1');
+
+            // Validar archivo de aprobación si es requerido
+            $nombreArchivoAprobacion = null;
+            if ($requiereAprobacion) {
+                if (!$archivoAprobacion || !isset($archivoAprobacion['tmp_name']) || empty($archivoAprobacion['tmp_name'])) {
+                    AuthMiddleware::sendError('Este servicio requiere carta de aprobación. Por favor, adjunta el documento correspondiente.', 400);
+                }
+
+                // Validar que sea PDF (múltiples métodos para compatibilidad)
+                $mimeType = null;
+                if (function_exists('finfo_open')) {
+                    try {
+                        $finfo = finfo_open(FILEINFO_MIME_TYPE);
+                        $mimeType = finfo_file($finfo, $archivoAprobacion['tmp_name']);
+                        finfo_close($finfo);
+                    } catch (\Exception $e) {
+                        error_log("⚠️ Error usando finfo: " . $e->getMessage());
+                    }
+                }
+
+                // Fallback: validar por extensión si finfo no está disponible
+                if (!$mimeType) {
+                    $extension = strtolower(pathinfo($archivoAprobacion['name'], PATHINFO_EXTENSION));
+                    if ($extension !== 'pdf') {
+                        AuthMiddleware::sendError('Solo se permiten archivos PDF para la carta de aprobación', 400);
+                    }
+                    $mimeType = 'application/pdf'; // Asumir que es PDF si la extensión es correcta
+                } else {
+                    if ($mimeType !== 'application/pdf') {
+                        AuthMiddleware::sendError('Solo se permiten archivos PDF para la carta de aprobación', 400);
+                    }
+                }
+
+                // Validar tamaño (máximo 10MB)
+                if (!isset($archivoAprobacion['size']) || $archivoAprobacion['size'] > 10 * 1024 * 1024) {
+                    AuthMiddleware::sendError('El archivo de aprobación no puede exceder 10MB', 400);
+                }
+
+                // Generar nombre único para el archivo
+                $extension = pathinfo($archivoAprobacion['name'], PATHINFO_EXTENSION);
+                if (empty($extension)) {
+                    $extension = 'pdf'; // Por defecto PDF
+                }
+                $nombreArchivoAprobacion = time() . '_' . $user['id_usuario'] . '_' . uniqid() . '.' . $extension;
+
+                // Crear directorio uploads si no existe
+                $uploadsDir = __DIR__ . '/../../uploads/';
+                if (!is_dir($uploadsDir)) {
+                    if (!mkdir($uploadsDir, 0755, true)) {
+                        error_log("❌ Error creando directorio uploads: $uploadsDir");
+                        AuthMiddleware::sendError('Error al crear directorio para archivos', 500);
+                    }
+                }
+
+                // Mover archivo
+                $rutaDestino = $uploadsDir . $nombreArchivoAprobacion;
+                if (!move_uploaded_file($archivoAprobacion['tmp_name'], $rutaDestino)) {
+                    error_log("❌ Error moviendo archivo de aprobación: " . ($archivoAprobacion['tmp_name'] ?? 'N/A') . " a " . $rutaDestino);
+                    AuthMiddleware::sendError('Error al guardar el archivo de aprobación', 500);
+                }
+
+                error_log("✅ Archivo de aprobación guardado: $nombreArchivoAprobacion");
+            }
+
+            // ASIGNACIÓN AUTOMÁTICA SEGÚN responsable_inicial DEL CATÁLOGO DE SERVICIOS
+            $tecnicoId = null;
+            $tecnicoNombre = null;
+
+            error_log("═══════════════════════════════════════════════════════");
+            error_log("🔍 INICIANDO ASIGNACIÓN AUTOMÁTICA - Servicio ID: " . $servicio['id_servicio']);
+            error_log("═══════════════════════════════════════════════════════");
+
+            // PASO 1: Obtener responsable_inicial del servicio
+            $stmtServicio = $this->db->query(
+                'SELECT responsable_inicial FROM servicios WHERE id_servicio = ?',
+                [$servicio['id_servicio']]
+            );
+            $servicioInfo = $stmtServicio->fetch();
+
+            if ($servicioInfo && !empty($servicioInfo['responsable_inicial'])) {
+                $responsableInicial = trim($servicioInfo['responsable_inicial']);
+                error_log("📋 Responsable inicial del catálogo: '$responsableInicial'");
+
+                // PASO 2: Listar TODOS los técnicos disponibles
+                $stmtAll = $this->db->query(
+                    'SELECT id_usuario, nombre, rol, estatus FROM usuarios
+                     WHERE (rol = "tecnico" OR rol = "administrador")
+                     AND estatus = "Activo"'
+                );
+                $allTecnicos = $stmtAll->fetchAll();
+                error_log("📋 Técnicos disponibles en BD (" . count($allTecnicos) . "):");
+                foreach ($allTecnicos as $tec) {
+                    error_log("  - ID: {$tec['id_usuario']}, Nombre: '{$tec['nombre']}', Rol: '{$tec['rol']}'");
+                }
+
+                // PASO 3: Buscar técnico por nombre exacto
+                $nombreBuscado = strtoupper(trim($responsableInicial));
+                error_log("🔍 Buscando técnico con nombre: '$nombreBuscado'");
+
+                // Buscar técnico - comparación exacta en mayúsculas
+                $stmtTecnico = $this->db->query(
+                    'SELECT id_usuario, nombre, rol FROM usuarios
+                     WHERE (rol = "tecnico" OR rol = "administrador")
+                     AND estatus = "Activo"
+                     AND UPPER(TRIM(nombre)) = ?
+                     LIMIT 1',
+                    [$nombreBuscado]
+                );
+                $tecnico = $stmtTecnico->fetch();
+
+                if ($tecnico) {
+                    $tecnicoId = (int)$tecnico['id_usuario'];
+                    $tecnicoNombre = $tecnico['nombre'];
+                    error_log("✅✅✅ TÉCNICO ENCONTRADO Y ASIGNADO: ID $tecnicoId, Nombre: '$tecnicoNombre' ✅✅✅");
+                } else {
+                    error_log("⚠️ No se encontró técnico con nombre exacto '$responsableInicial' - Ticket quedará sin asignar (Pendiente)");
+                    error_log("⚠️ IMPORTANTE: Verificar que el nombre en 'responsable_inicial' del catálogo coincida exactamente con el nombre del técnico en la tabla usuarios");
+                }
+            } else {
+                error_log("⚠️ El servicio no tiene responsable_inicial configurado - Ticket quedará sin asignar (Pendiente)");
+            }
+
+            // NO HAY FALLBACK - Solo se asigna al técnico específico del catálogo de servicios
+            // Si no se encuentra, el ticket queda sin asignar (estado Pendiente) para asignación manual
+
+            error_log("═══════════════════════════════════════════════════════");
+            error_log("📊 RESULTADO FINAL: tecnicoId = " . ($tecnicoId ?? 'NULL') . ", tecnicoNombre = " . ($tecnicoNombre ?? 'NULL'));
+            error_log("═══════════════════════════════════════════════════════");
+
+            // Create ticket con o sin técnico asignado
+            error_log("═══════════════════════════════════════════════════════");
+            error_log("📝 CREANDO TICKET EN BASE DE DATOS");
+            error_log("   - id_usuario: " . $user['id_usuario']);
+            error_log("   - id_servicio: " . $servicio['id_servicio']);
+            error_log("   - id_tecnico: " . ($tecnicoId ?? 'NULL') . " (tipo: " . gettype($tecnicoId) . ")");
+            error_log("   - estatus: " . ($tecnicoId ? 'En proceso' : 'Pendiente'));
+            error_log("═══════════════════════════════════════════════════════");
+
+            // Asegurar que tecnicoId sea un entero o NULL
+            $idTecnicoParaInsert = ($tecnicoId && $tecnicoId > 0) ? (int)$tecnicoId : null;
+
+            // Calcular tiempo_restante_finalizacion basado en tiempo_maximo o tiempo_objetivo
+            $tiempoRestanteSegundos = null;
+            $tiempoMaximo = $servicio['tiempo_maximo'] ?? null;
+            $tiempoObjetivo = $servicio['tiempo_objetivo'] ?? null;
+
+            try {
+                if ($tiempoMaximo || $tiempoObjetivo) {
+                    // Convertir tiempo_maximo o tiempo_objetivo a segundos
+                    // Formato puede ser: "HH:MM:SS" o "D días" o número de horas
+                    $tiempoParaCalcular = $tiempoMaximo ?: $tiempoObjetivo;
+
+                    if (!empty($tiempoParaCalcular)) {
+                        // Intentar parsear diferentes formatos
+                        if (preg_match('/^(\d+):(\d+):(\d+)$/', $tiempoParaCalcular, $matches)) {
+                            // Formato HH:MM:SS
+                            $tiempoRestanteSegundos = (int)$matches[1] * 3600 + (int)$matches[2] * 60 + (int)$matches[3];
+                        } elseif (preg_match('/(\d+)\s*d[íi]as?/i', $tiempoParaCalcular, $matches)) {
+                            // Formato "X días"
+                            $tiempoRestanteSegundos = (int)$matches[1] * 24 * 3600;
+                        } elseif (is_numeric($tiempoParaCalcular)) {
+                            // Número de horas
+                            $tiempoRestanteSegundos = (int)$tiempoParaCalcular * 3600;
+                        } else {
+                            // Por defecto, intentar como horas
+                            $tiempoRestanteSegundos = (int)$tiempoParaCalcular * 3600;
+                        }
+
+                        error_log("⏱️ Tiempo calculado: $tiempoParaCalcular = $tiempoRestanteSegundos segundos");
+                    }
+                }
+            } catch (\Exception $e) {
+                error_log("⚠️ Error calculando tiempo_restante_finalizacion: " . $e->getMessage());
+                // Continuar sin tiempo_restante_finalizacion si hay error
+                $tiempoRestanteSegundos = null;
+            }
+
+            // INSERT SIMPLIFICADO - Solo campos esenciales primero
+            $estatusFinal = $idTecnicoParaInsert ? 'En proceso' : 'Pendiente';
+
+            try {
+                if ($idTecnicoParaInsert) {
+                    // Con técnico
+            $this->db->query(
+                        'INSERT INTO tickets (id_usuario, id_servicio, descripcion, prioridad, estatus, id_tecnico, fecha_asignacion)
+                         VALUES (?, ?, ?, ?, ?, ?, NOW())',
+                        [
+                            $user['id_usuario'],
+                            $servicio['id_servicio'],
+                            $descripcion,
+                            $prioridad,
+                            $estatusFinal,
+                            $idTecnicoParaInsert
+                        ]
+                    );
+                } else {
+                    // Sin técnico
+                    $this->db->query(
+                        'INSERT INTO tickets (id_usuario, id_servicio, descripcion, prioridad, estatus)
+                         VALUES (?, ?, ?, ?, ?)',
+                        [
+                            $user['id_usuario'],
+                            $servicio['id_servicio'],
+                            $descripcion,
+                            $prioridad,
+                            $estatusFinal
+                        ]
+                    );
+                }
+
+                $ticketId = (int)$this->db->getConnection()->lastInsertId();
+
+                if (!$ticketId) {
+                    throw new \Exception('No se pudo obtener el ID del ticket');
+                }
+
+                // Actualizar campos opcionales después del INSERT
+                if ($nombreArchivoAprobacion || $tiempoRestanteSegundos !== null) {
+                    $updateFields = [];
+                    $updateParams = [];
+
+                    if ($nombreArchivoAprobacion) {
+                        $updateFields[] = 'archivo_aprobacion = ?';
+                        $updateParams[] = $nombreArchivoAprobacion;
+                    }
+
+                    if ($tiempoRestanteSegundos !== null) {
+                        $updateFields[] = 'tiempo_restante_finalizacion = ?';
+                        $updateParams[] = $tiempoRestanteSegundos;
+                    }
+
+                    if (!empty($updateFields)) {
+                        $updateParams[] = $ticketId;
+                        $this->db->query(
+                            'UPDATE tickets SET ' . implode(', ', $updateFields) . ' WHERE id_ticket = ?',
+                            $updateParams
+                        );
+                    }
+                }
+
+                error_log("✅ Ticket #$ticketId creado exitosamente");
+            } catch (\Exception $e) {
+                error_log("❌ ERROR: " . $e->getMessage());
+                throw $e;
+            }
+
+            $estadoFinal = $idTecnicoParaInsert ? 'En proceso' : 'Pendiente';
+
+            // ============================================
+            // CREAR NOTIFICACIONES - ANTES de enviar respuesta
+            // ============================================
+            try {
+                error_log("📧 [NOTIFICACIONES] Creando notificaciones para ticket #$ticketId");
+
+                // CRÍTICO: Obtener el ID del usuario REAL del ticket desde la BD
+                // NO usar $user['id_usuario'] del token, usar el ID real del ticket
+                $stmtTicketUsuario = $this->db->query(
+                    'SELECT id_usuario FROM tickets WHERE id_ticket = ?',
+                    [$ticketId]
+                );
+                $ticketUsuario = $stmtTicketUsuario->fetch();
+
+                if (!$ticketUsuario || !isset($ticketUsuario['id_usuario']) || $ticketUsuario['id_usuario'] <= 0) {
+                    error_log("❌ [NOTIFICACIONES] ERROR CRÍTICO: No se puede obtener id_usuario del ticket #$ticketId desde la BD");
+                } else {
+                    $idUsuarioCreador = (int)$ticketUsuario['id_usuario'];
+                    error_log("📧 [NOTIFICACIONES] Usuario REAL del ticket desde BD: ID $idUsuarioCreador (token tenía: {$user['id_usuario']})");
+
+                    // NOTIFICACIÓN 1: SOLO al usuario que creó el ticket - SIEMPRE
+                    $resultEmp1 = $this->crearNotificacionInterna(
+                        $idUsuarioCreador,
+                        $ticketId,
+                        "Tu ticket #$ticketId ha sido creado exitosamente"
+                    );
+                    error_log($resultEmp1 ? "✅ [NOTIFICACIONES] Notificación creación empleado (ID: $idUsuarioCreador) OK" : "❌ [NOTIFICACIONES] Notificación creación empleado FALLÓ");
+
+                    // Si hay técnico asignado, notificar también
+                    if ($tecnicoId && $idTecnicoParaInsert) {
+                        $idTecnicoValidado = (int)$idTecnicoParaInsert;
+
+                        // IMPORTANTE: Solo notificar al técnico si es diferente del usuario que creó el ticket
+                        if ($idTecnicoValidado > 0 && $idTecnicoValidado !== $idUsuarioCreador) {
+                            // NOTIFICACIÓN 2: SOLO al técnico asignado (NO al usuario que creó el ticket)
+                            $resultTec = $this->crearNotificacionInterna(
+                                $idTecnicoValidado,
+                                $ticketId,
+                                "Se te ha asignado un nuevo ticket #$ticketId. Categoría: $categoria - $subcategoria"
+                            );
+                            error_log($resultTec ? "✅ [NOTIFICACIONES] Notificación técnico (ID: $idTecnicoValidado) OK" : "❌ [NOTIFICACIONES] Notificación técnico FALLÓ");
+
+                            // Obtener nombre del técnico para el mensaje
+                            $nombreTecnico = 'el técnico asignado';
+                            try {
+                                $stmtTec = $this->db->query('SELECT nombre FROM usuarios WHERE id_usuario = ?', [$idTecnicoValidado]);
+                                $tecData = $stmtTec->fetch();
+                                if ($tecData && !empty($tecData['nombre'])) {
+                                    $nombreTecnico = $tecData['nombre'];
+                                }
+                            } catch (\Exception $e) {
+                                error_log("⚠️ No se pudo obtener nombre del técnico: " . $e->getMessage());
+                            }
+
+                            // NOTIFICACIÓN 3: SOLO al usuario que creó el ticket sobre la asignación
+                            $resultEmp2 = $this->crearNotificacionInterna(
+                                $idUsuarioCreador,
+                                $ticketId,
+                                "Tu ticket #$ticketId ha sido asignado al técnico $nombreTecnico. Estado: En proceso"
+                            );
+                            error_log($resultEmp2 ? "✅ [NOTIFICACIONES] Notificación asignación empleado (ID: $idUsuarioCreador) OK" : "❌ [NOTIFICACIONES] Notificación asignación empleado FALLÓ");
+                        } else {
+                            error_log("⚠️ [NOTIFICACIONES] El técnico asignado ($idTecnicoValidado) es el mismo que el usuario que creó el ticket ($idUsuarioCreador) - No se crea notificación de asignación");
+                        }
+                    } else {
+                        // Sin técnico asignado - solo notificar al usuario que creó el ticket
+                        $resultEmp3 = $this->crearNotificacionInterna(
+                            $idUsuarioCreador,
+                            $ticketId,
+                            "Tu ticket #$ticketId ha sido creado exitosamente. Estado: Pendiente de asignación"
+                        );
+                        error_log($resultEmp3 ? "✅ [NOTIFICACIONES] Notificación pendiente empleado (ID: $idUsuarioCreador) OK" : "❌ [NOTIFICACIONES] Notificación pendiente FALLÓ");
+                    }
+                }
+            } catch (\Exception $e) {
+                error_log("❌ [NOTIFICACIONES] Error crítico creando notificaciones para ticket #$ticketId: " . $e->getMessage());
+                error_log("❌ [NOTIFICACIONES] Stack trace: " . $e->getTraceAsString());
+                // NO bloquear la respuesta si fallan las notificaciones
+            }
+
+            // Preparar respuesta SIMPLE y DIRECTA - siempre funciona
+            $tiempoEstimado = $servicio['tiempo_maximo'] ?? $servicio['tiempo_objetivo'] ?? null;
+
+            $response = [
+                'message' => 'Ticket creado exitosamente',
+                'ticket' => [
+                    'id' => $ticketId,
+                    'categoria' => $categoria,
+                    'subcategoria' => $subcategoria,
+                    'descripcion' => $descripcion,
+                    'prioridad' => $prioridad,
+                    'estado' => $estadoFinal,
+                    'fechaCreacion' => date('Y-m-d H:i:s'),
+                    'tiempoEstimado' => $tiempoEstimado, // Tiempo aproximado de solución
+                    'tiempoObjetivo' => $servicio['tiempo_objetivo'] ?? null,
+                    'tiempoMaximo' => $servicio['tiempo_maximo'] ?? null
+                ]
+            ];
+
+            // Agregar información de asignación si se asignó
+            if ($tecnicoId && $idTecnicoParaInsert) {
+                $response['asignacionAutomatica'] = [
+                    'exitosa' => true,
+                    'tecnico' => $tecnicoNombre ?? 'Técnico asignado',
+                    'tecnicoId' => $idTecnicoParaInsert
+                ];
+
+                $response['ticket']['tecnicoAsignado'] = [
+                    'id' => $idTecnicoParaInsert,
+                    'nombre' => $tecnicoNombre ?? 'Técnico asignado'
+                ];
+            } else {
+                $response['asignacionAutomatica'] = [
+                    'exitosa' => false,
+                    'mensaje' => 'No se pudo asignar técnico automáticamente. El ticket quedó en estado Pendiente.'
+                ];
+                $response['ticket']['tecnicoAsignado'] = null;
+            }
+
+            // ENVIAR RESPUESTA DESPUÉS de crear las notificaciones
+            error_log("✅ Enviando respuesta exitosa para ticket #$ticketId");
+            AuthMiddleware::sendResponse($response, 201);
+
+            // Intentar enviar correos DESPUÉS de enviar la respuesta (no bloquea)
+            // IMPORTANTE: Los correos se envían de forma asíncrona y no bloquean la respuesta
+            // Si fallan, se loguean pero no afectan la creación del ticket ni las notificaciones
+            try {
+                error_log("📧 [CORREOS] Preparando envío de correos para ticket #$ticketId");
+
+                // Obtener datos del empleado (SIEMPRE)
+                $stmtEmpleado = $this->db->query(
+                    'SELECT nombre, correo FROM usuarios WHERE id_usuario = ?',
+                    [$user['id_usuario']]
+                );
+                $empleado = $stmtEmpleado->fetch();
+
+                if (!$empleado) {
+                    error_log("⚠️ [CORREOS] No se encontró empleado con ID: {$user['id_usuario']}");
+                } elseif (empty($empleado['correo'])) {
+                    error_log("⚠️ [CORREOS] El empleado {$empleado['nombre']} no tiene correo configurado");
+                } elseif (!filter_var($empleado['correo'], FILTER_VALIDATE_EMAIL)) {
+                    error_log("⚠️ [CORREOS] Correo del empleado inválido: {$empleado['correo']}");
+                } else {
+                    $emailService = new EmailService();
+
+                    // Si hay técnico asignado, enviar correos de asignación
+                    if ($tecnicoId && $idTecnicoParaInsert) {
+                        $stmtTecnico = $this->db->query(
+                            'SELECT nombre, correo FROM usuarios WHERE id_usuario = ?',
+                            [$idTecnicoParaInsert]
+                        );
+                        $tecnico = $stmtTecnico->fetch();
+
+                        if (!$tecnico) {
+                            error_log("⚠️ [CORREOS] No se encontró técnico con ID: $idTecnicoParaInsert");
+                        } elseif (empty($tecnico['correo'])) {
+                            error_log("⚠️ [CORREOS] El técnico {$tecnico['nombre']} no tiene correo configurado");
+                        } elseif (!filter_var($tecnico['correo'], FILTER_VALIDATE_EMAIL)) {
+                            error_log("⚠️ [CORREOS] Correo del técnico inválido: {$tecnico['correo']}");
+                        } else {
+                            error_log("📧 [CORREOS] Enviando correos de asignación - Técnico: {$tecnico['correo']}, Empleado: {$empleado['correo']}");
+
+                            try {
+                                $emailService->sendTicketAssignedNotification(
+                                    [
+                                        'id' => $ticketId,
+                                        'categoria' => $categoria,
+                                        'subcategoria' => $subcategoria,
+                                        'descripcion' => $descripcion,
+                                        'prioridad' => $prioridad
+                                    ],
+                                    ['nombre' => $tecnico['nombre'], 'email' => $tecnico['correo']],
+                                    ['nombre' => $empleado['nombre'], 'email' => $empleado['correo']]
+                                );
+                                error_log("✅ [CORREOS] Correos de asignación enviados para ticket #$ticketId");
+                            } catch (\Exception $emailEx) {
+                                $errorMsg = "❌ [CORREOS] Error crítico enviando correos de asignación para ticket #$ticketId: " . $emailEx->getMessage();
+                                error_log($errorMsg);
+                                error_log("❌ [CORREOS] Stack trace: " . $emailEx->getTraceAsString());
+                                error_log("❌ [CORREOS] Destinatarios: Técnico={$tecnico['correo']}, Empleado={$empleado['correo']}");
+                                error_log("❌ [CORREOS] DIAGNÓSTICO: ¿Existe archivo .env? ¿SENDGRID_API_KEY está configurado?");
+
+                                // Intentar verificar configuración
+                                $cleanEnv = function($key, $default = '') {
+                                    $value = $_ENV[$key] ?? $default;
+                                    if (is_string($value) && strlen($value) > 0) {
+                                        if (($value[0] === '"' && substr($value, -1) === '"') || ($value[0] === "'" && substr($value, -1) === "'")) {
+                                            $value = substr($value, 1, -1);
+                                        }
+                                    }
+                                    return trim($value);
+                                };
+                                $apiKey = $cleanEnv('SENDGRID_API_KEY', '');
+                                error_log("❌ [CORREOS] SENDGRID_API_KEY configurado: " . (empty($apiKey) ? 'NO ❌' : 'SÍ ✅ (Longitud: ' . strlen($apiKey) . ')'));
+                                // NO lanzar la excepción - las notificaciones ya se crearon
+                            }
+                        }
+                    } else {
+                        // Sin técnico asignado, enviar correo de creación
+                        error_log("📧 [CORREOS] Enviando correo de creación al empleado: {$empleado['correo']}");
+
+                        try {
+                            $result = $emailService->sendTicketCreatedNotification(
+                                [
+                                    'id' => $ticketId,
+                                    'categoria' => $categoria,
+                                    'subcategoria' => $subcategoria,
+                                    'descripcion' => $descripcion,
+                                    'prioridad' => $prioridad
+                                ],
+                                ['nombre' => $empleado['nombre'], 'email' => $empleado['correo']]
+                            );
+
+                            if ($result) {
+                                error_log("✅ [CORREOS] Correo de creación enviado para ticket #$ticketId");
+                            } else {
+                                error_log("⚠️ [CORREOS] Correo de creación falló para ticket #$ticketId (ver logs anteriores)");
+                            }
+                        } catch (\Exception $emailEx) {
+                            $errorMsg = "❌ [CORREOS] Error crítico enviando correo de creación para ticket #$ticketId: " . $emailEx->getMessage();
+                            error_log($errorMsg);
+                            error_log("❌ [CORREOS] Stack trace: " . $emailEx->getTraceAsString());
+                            error_log("❌ [CORREOS] Destinatario: {$empleado['correo']}");
+                            error_log("❌ [CORREOS] DIAGNÓSTICO: ¿Existe archivo .env? ¿SENDGRID_API_KEY está configurado?");
+
+                            // Intentar verificar configuración
+                            $cleanEnv = function($key, $default = '') {
+                                $value = $_ENV[$key] ?? $default;
+                                if (is_string($value) && strlen($value) > 0) {
+                                    if (($value[0] === '"' && substr($value, -1) === '"') || ($value[0] === "'" && substr($value, -1) === "'")) {
+                                        $value = substr($value, 1, -1);
+                                    }
+                                }
+                                return trim($value);
+                            };
+                            $apiKey = $cleanEnv('SENDGRID_API_KEY', '');
+                            error_log("❌ [CORREOS] SENDGRID_API_KEY configurado: " . (empty($apiKey) ? 'NO ❌' : 'SÍ ✅ (Longitud: ' . strlen($apiKey) . ')'));
+                            // NO lanzar la excepción - las notificaciones ya se crearon
+                        }
+                    }
+                }
+            } catch (\Exception $e) {
+                error_log("❌ [CORREOS] Error general enviando correos para ticket #$ticketId: " . $e->getMessage());
+                error_log("❌ [CORREOS] Stack trace: " . $e->getTraceAsString());
+                // NO lanzar la excepción - las notificaciones deben crearse independientemente
+            }
+
+            // Las notificaciones ya se crearon antes de enviar la respuesta
+        } catch (\PDOException $e) {
+            error_log('❌ Error PDO creating ticket: ' . $e->getMessage());
+            error_log('❌ SQL State: ' . ($e->errorInfo[0] ?? 'N/A'));
+            error_log('❌ Driver Error: ' . ($e->errorInfo[1] ?? 'N/A'));
+
+            // Si hay un archivo subido pero falló, intentar eliminarlo
+            if (isset($nombreArchivoAprobacion) && $nombreArchivoAprobacion) {
+                $filePath = __DIR__ . '/../../uploads/' . $nombreArchivoAprobacion;
+                if (file_exists($filePath)) {
+                    @unlink($filePath);
+                    error_log("🗑️ Archivo de aprobación eliminado tras error: $nombreArchivoAprobacion");
+                }
+            }
+
+            // Determinar código de error apropiado según el tipo de error SQL
+            $errorCode = 500;
+            $errorMessage = 'Error al crear el ticket en la base de datos';
+
+            if (isset($e->errorInfo[0])) {
+                switch ($e->errorInfo[0]) {
+                    case '23000': // Violación de restricción de integridad
+                        $errorCode = 400;
+                        $errorMessage = 'Error de validación: Los datos proporcionados no son válidos';
+                        break;
+                    case '42S02': // Tabla no existe
+                    case '42S22': // Columna no existe
+                        $errorCode = 500;
+                        $errorMessage = 'Error de configuración del sistema';
+                        break;
+                    default:
+                        $errorCode = 500;
+                        $errorMessage = 'Error interno del servidor';
+                }
+            }
+
+            AuthMiddleware::sendError($errorMessage, $errorCode);
+        } catch (\Exception $e) {
+            error_log('❌ Error creating ticket: ' . $e->getMessage());
+            error_log('❌ Stack trace: ' . $e->getTraceAsString());
+            error_log('❌ File: ' . $e->getFile() . ' Line: ' . $e->getLine());
+
+            // Si hay un archivo subido pero falló, intentar eliminarlo
+            if (isset($nombreArchivoAprobacion) && $nombreArchivoAprobacion) {
+                $filePath = __DIR__ . '/../../uploads/' . $nombreArchivoAprobacion;
+                if (file_exists($filePath)) {
+                    @unlink($filePath);
+                    error_log("🗑️ Archivo de aprobación eliminado tras error: $nombreArchivoAprobacion");
+                }
+            }
+
+            // Si el error ya tiene un código HTTP, usarlo; sino usar 500
+            $errorCode = method_exists($e, 'getCode') && $e->getCode() >= 400 && $e->getCode() < 600
+                ? $e->getCode()
+                : 500;
+
+            $errorMessage = $e->getMessage() ?: 'Error interno del servidor';
+
+            AuthMiddleware::sendError($errorMessage, $errorCode);
+        }
+    }
+
+    public function updateTicketStatus($id)
+    {
+        $user = AuthMiddleware::authenticate();
+        $body = AuthMiddleware::getRequestBody();
+
+        $estatus = $body['estatus'] ?? $body['nuevoEstado'] ?? '';
+
+        if (empty($estatus)) {
+            AuthMiddleware::sendError('Estado es requerido', 400);
+        }
+
+        try {
+            // OPTIMIZADO: Obtener estado anterior y datos del ticket antes de actualizar (con LIMIT 1)
+            $stmtOld = $this->db->query(
+                'SELECT t.estatus, t.id_tecnico, t.id_usuario, s.categoria, s.subcategoria,
+                        u.id_usuario as empleado_id, u.nombre as empleado_nombre, u.correo as empleado_correo,
+                        tec.nombre as tecnico_nombre, tec.correo as tecnico_correo
+                 FROM tickets t
+                 JOIN servicios s ON t.id_servicio = s.id_servicio
+                 JOIN usuarios u ON t.id_usuario = u.id_usuario
+                 LEFT JOIN usuarios tec ON t.id_tecnico = tec.id_usuario
+                 WHERE t.id_ticket = ?
+                 LIMIT 1',
+                [$id]
+            );
+            $ticketOld = $stmtOld->fetch();
+
+            if (!$ticketOld) {
+                AuthMiddleware::sendError('Ticket no encontrado', 404);
+            }
+
+            $estadoAnterior = $ticketOld['estatus'];
+
+            // LÓGICA DE REAPERTURA: Detectar si se está reabriendo un ticket (de Finalizado/Cerrado a otro estado)
+            $esReapertura = ($estadoAnterior === 'Finalizado' || $estadoAnterior === 'Cerrado') &&
+                           ($estatus !== 'Finalizado' && $estatus !== 'Cerrado');
+
+            if ($esReapertura) {
+                // Obtener observaciones del usuario (puede venir como comentarios o observaciones)
+                $observacionesReapertura = trim($body['comentarios'] ?? $body['observaciones'] ?? $body['observaciones_usuario'] ?? 'Reapertura solicitada sin comentarios');
+
+                try {
+                    // Insertar registro en ticketreaperturas
+                    $this->db->query(
+                        'INSERT INTO ticketreaperturas (
+                            id_ticket,
+                            usuario_id,
+                            tecnico_id,
+                            observaciones_usuario,
+                            fecha_reapertura,
+                            estado_reapertura
+                        ) VALUES (?, ?, ?, ?, NOW(), ?)',
+                        [
+                            $id,
+                            $user['id_usuario'],
+                            $ticketOld['id_tecnico'] ?? null,
+                            $observacionesReapertura,
+                            $estadoAnterior
+                        ]
+                    );
+                    error_log("✅ Reapertura registrada en ticketreaperturas para ticket #$id (estado anterior: $estadoAnterior)");
+                } catch (\Exception $e) {
+                    error_log("⚠️ Error registrando reapertura para ticket #$id: " . $e->getMessage());
+                    // No fallar el proceso si hay error al registrar la reapertura
+                }
+            }
+
+            // LÓGICA ESPECIAL PARA ESTADO "PENDIENTE": Requiere motivo y tiempo estimado
+            // EXCEPTO cuando se está reabriendo un ticket (de Cerrado/Finalizado a Pendiente)
+            if ($estatus === 'Pendiente' && ($estadoAnterior === 'En Progreso' || $estadoAnterior === 'En proceso') && !$esReapertura) {
+                $pendienteMotivo = trim($body['pendienteMotivo'] ?? $body['motivo'] ?? '');
+                $pendienteTiempoEstimado = trim($body['pendienteTiempoEstimado'] ?? $body['tiempoEstimado'] ?? '');
+
+                if (empty($pendienteMotivo)) {
+                    AuthMiddleware::sendError('Debes proporcionar un motivo para marcar el ticket como Pendiente', 400);
+                }
+
+                if (empty($pendienteTiempoEstimado)) {
+                    AuthMiddleware::sendError('Debes proporcionar un tiempo estimado para retomar el ticket', 400);
+                }
+
+                // Guardar motivo y tiempo estimado
+                $this->db->query(
+                    'UPDATE tickets SET
+                        estatus = ?,
+                        pendiente_motivo = ?,
+                        pendiente_tiempo_estimado = ?,
+                        pendiente_actualizado_en = NOW(),
+                        pendiente_actualizado_por = ?
+                     WHERE id_ticket = ?',
+                    [$estatus, $pendienteMotivo, $pendienteTiempoEstimado, $user['id_usuario'], $id]
+                );
+
+                error_log("✅ Ticket #$id marcado como Pendiente con motivo y tiempo estimado");
+
+                // Continuar con el envío de correos y respuesta
+            } else if ($estatus === 'En Progreso' || $estatus === 'En proceso') {
+                // Normalizar el estado a "En Progreso"
+                $estatusNormalizado = 'En Progreso';
+
+                // Verificar estado actual y fecha_inicio_atencion
+                $stmtCheck = $this->db->query(
+                    'SELECT fecha_inicio_atencion, estatus FROM tickets WHERE id_ticket = ?',
+                    [$id]
+                );
+                $checkData = $stmtCheck->fetch();
+
+                // Si ya está en "En Progreso", solo asegurar que fecha_inicio_atencion esté establecida
+                if ($checkData['estatus'] === 'En Progreso' || $checkData['estatus'] === 'En proceso') {
+                    if (empty($checkData['fecha_inicio_atencion'])) {
+                        $this->db->query(
+                            'UPDATE tickets SET fecha_inicio_atencion = NOW() WHERE id_ticket = ?',
+                            [$id]
+                        );
+                        error_log("✅ Ticket #$id - fecha_inicio_atencion establecida (ya estaba en En Progreso)");
+                    }
+                } else {
+                    // Cambiar a "En Progreso" por primera vez
+                    // IMPORTANTE: Si es reapertura, mantener fecha_inicio_atencion original para continuar el tiempo desde donde se quedó
+                    // Solo establecer fecha_inicio_atencion si no existe (ticket nuevo o primera vez que se abre)
+                    $this->db->query(
+                        'UPDATE tickets SET estatus = ?, fecha_inicio_atencion = COALESCE(fecha_inicio_atencion, NOW()) WHERE id_ticket = ?',
+                        [$estatusNormalizado, $id]
+                    );
+                    error_log("✅ Ticket #$id cambiado a En Progreso (fecha_inicio_atencion: " . ($checkData['fecha_inicio_atencion'] ?? 'NUEVO') . ")");
+                }
+            } else if ($estatus === 'Finalizado') {
+                // Al finalizar, calcular tiempo_atencion_segundos
+                try {
+                    $stmtFinalizar = $this->db->query(
+                        'SELECT fecha_inicio_atencion FROM tickets WHERE id_ticket = ?',
+                        [$id]
+                    );
+                    $finalizarData = $stmtFinalizar->fetch();
+
+                    $tiempoAtencionSegundos = null;
+                    if (!empty($finalizarData['fecha_inicio_atencion'])) {
+                        try {
+                            $stmtCalc = $this->db->query(
+                                'SELECT TIMESTAMPDIFF(SECOND, fecha_inicio_atencion, NOW()) as segundos FROM tickets WHERE id_ticket = ?',
+                                [$id]
+                            );
+                            $calcData = $stmtCalc->fetch();
+                            $tiempoAtencionSegundos = $calcData['segundos'] ?? null;
+                        } catch (\Exception $e) {
+                            error_log("⚠️ Error calculando tiempo_atencion_segundos para ticket #$id: " . $e->getMessage());
+                            // Continuar sin tiempo_atencion_segundos
+                        }
+                    }
+
+                    // Actualizar ticket a Finalizado
+                    $this->db->query(
+                        'UPDATE tickets SET
+                            estatus = ?,
+                            fecha_finalizacion = NOW(),
+                            fecha_cierre = NOW(),
+                            tiempo_atencion_segundos = ?
+                         WHERE id_ticket = ?',
+                        [$estatus, $tiempoAtencionSegundos, $id]
+                    );
+                    error_log("✅ Ticket #$id finalizado (tiempo_atencion_segundos: $tiempoAtencionSegundos)");
+                } catch (\Exception $e) {
+                    error_log("⚠️ Error en proceso de finalización para ticket #$id: " . $e->getMessage());
+                    // Intentar actualizar solo el estado si falla el cálculo - esto NO debe fallar
+                    try {
+                        $this->db->query(
+                            'UPDATE tickets SET estatus = ?, fecha_finalizacion = NOW(), fecha_cierre = NOW() WHERE id_ticket = ?',
+                            [$estatus, $id]
+                        );
+                        error_log("✅ Ticket #$id finalizado (sin tiempo_atencion_segundos debido a error en cálculo)");
+                    } catch (\Exception $e2) {
+                        error_log("❌ ERROR CRÍTICO: No se pudo actualizar ticket #$id: " . $e2->getMessage());
+                        // Lanzar excepción solo si el UPDATE básico falla
+                        throw new \Exception('Error al finalizar el ticket: ' . $e2->getMessage());
+                    }
+                }
+            }
+
+            // LÓGICA ESPECIAL: Si es administrador O técnico actual reasignando un ticket escalado
+            // Permitir que el técnico que tiene el ticket escalado lo pueda reasignar a otro técnico
+            $esReasignacionDeEscalado = $estadoAnterior === 'Escalado' && $estatus !== 'Escalado';
+            $esAdministrador = $user['rol'] === 'administrador';
+            $esTecnicoConTicketEscalado = ($user['rol'] === 'tecnico' || $user['rol'] === 'administrador') &&
+                                         isset($ticketOld['id_tecnico']) &&
+                                         $ticketOld['id_tecnico'] == $user['id_usuario'];
+
+            if ($esReasignacionDeEscalado && ($esAdministrador || $esTecnicoConTicketEscalado)) {
+                // Obtener el técnico original del último escalamiento
+                $stmtEscalamiento = $this->db->query(
+                    'SELECT tecnico_original_id FROM escalamientos
+                     WHERE id_ticket = ?
+                     ORDER BY fecha_escalamiento DESC LIMIT 1',
+                    [$id]
+                );
+                $escalamiento = $stmtEscalamiento->fetch();
+
+                if ($escalamiento && $escalamiento['tecnico_original_id']) {
+                    $comentarioAdmin = trim($body['comentarioAdminTecnico'] ?? $body['comentario_admin_tecnico'] ?? '');
+
+                    // Regresar al técnico original
+                    $this->db->query(
+                        'UPDATE tickets SET
+                            estatus = ?,
+                            id_tecnico = ?,
+                            comentario_admin_tecnico = ?,
+                            fecha_asignacion = COALESCE(fecha_asignacion, NOW())
+                         WHERE id_ticket = ?',
+                        [$estatus, $escalamiento['tecnico_original_id'], $comentarioAdmin, $id]
+                    );
+
+                    // Enviar correo al técnico original con el comentario privado
+                    try {
+                        $stmtTecnicoOriginal = $this->db->query(
+                            'SELECT id_usuario, nombre, correo FROM usuarios WHERE id_usuario = ?',
+                            [$escalamiento['tecnico_original_id']]
+                        );
+                        $tecnicoOriginal = $stmtTecnicoOriginal->fetch();
+
+                        if ($tecnicoOriginal) {
+                            $ticketData = [
+                                'id' => $id,
+                                'categoria' => $ticketOld['categoria'],
+                                'subcategoria' => $ticketOld['subcategoria']
+                            ];
+
+                            $emailService = new EmailService();
+                            $emailService->sendTicketReturnedFromEscalationEmail(
+                                $ticketData,
+                                ['nombre' => $tecnicoOriginal['nombre'], 'email' => $tecnicoOriginal['correo']],
+                                $comentarioAdmin
+                            );
+                             error_log("📧 Correo de regreso de escalamiento enviado a técnico original para ticket #$id");
+                        }
+                    } catch (\Exception $e) {
+                        error_log("⚠️ Error enviando correo de regreso de escalamiento para ticket #$id: " . $e->getMessage());
+                    }
+
+                    // ============================================
+                    // CREAR NOTIFICACIONES DE REGRESO - SIEMPRE
+                    // ============================================
+                    try {
+                        error_log("📧 [NOTIFICACIONES] Creando notificaciones de regreso de escalamiento para ticket #$id");
+
+                        if (isset($escalamiento['tecnico_original_id']) && $escalamiento['tecnico_original_id'] > 0) {
+                            // Crear notificación interna para el técnico original
+                            $mensajeTecnico = "El ticket #$id ha sido regresado a tu atención desde escalamiento";
+                            if (!empty($comentarioAdmin)) {
+                                $mensajeTecnico .= ". Comentario del administrador: " . substr($comentarioAdmin, 0, 100);
+                            }
+                            $resultTec = $this->crearNotificacionInterna(
+                                $escalamiento['tecnico_original_id'],
+                                $id,
+                                $mensajeTecnico
+                            );
+                            error_log($resultTec ? "✅ [NOTIFICACIONES] Notificación regreso técnico OK" : "❌ [NOTIFICACIONES] Notificación regreso técnico FALLÓ");
+
+                            // Notificar al empleado
+                            if (isset($ticketOld['empleado_id']) && $ticketOld['empleado_id'] > 0) {
+                                $resultEmp = $this->crearNotificacionInterna(
+                                    $ticketOld['empleado_id'],
+                                    $id,
+                                    "Tu ticket #$id ha sido regresado al técnico original"
+                                );
+                                error_log($resultEmp ? "✅ [NOTIFICACIONES] Notificación regreso empleado OK" : "❌ [NOTIFICACIONES] Notificación regreso empleado FALLÓ");
+                            }
+                        } else {
+                            error_log("⚠️ [NOTIFICACIONES] No se puede crear: tecnico_original_id inválido");
+                        }
+                    } catch (\Exception $e) {
+                        error_log("❌ [NOTIFICACIONES] Error crítico creando notificaciones de regreso: " . $e->getMessage());
+                    }
+
+                    error_log("✅ Ticket #$id regresado al técnico original por administrador");
+                }
+            }
+
+            // Verificar si se está asignando un técnico manualmente
+            // IMPORTANTE: Permitir reasignación si el ticket estaba escalado y el usuario actual es el técnico asignado
+            $idTecnicoNuevo = $body['id_tecnico'] ?? null;
+            $esTecnicoActual = isset($ticketOld['id_tecnico']) && $ticketOld['id_tecnico'] == $user['id_usuario'];
+            $esAdmin = $user['rol'] === 'administrador';
+
+            // Permitir asignación si:
+            // 1. Hay un técnico nuevo Y es diferente del actual, O
+            // 2. El ticket estaba escalado (para permitir reasignación desde tickets escalados)
+            $puedeAsignar = false;
+            if ($idTecnicoNuevo) {
+                if ($idTecnicoNuevo != $ticketOld['id_tecnico']) {
+                    // Técnico diferente - permitir si es admin o técnico actual
+                    $puedeAsignar = $esAdmin || $esTecnicoActual;
+                } elseif ($estadoAnterior === 'Escalado' && $esTecnicoActual) {
+                    // Mismo técnico pero ticket estaba escalado y el usuario es el técnico actual - permitir cambio de estado
+                    $puedeAsignar = true;
+                }
+            }
+
+            if ($puedeAsignar) {
+                // Se está asignando un técnico manualmente o reasignando un ticket escalado
+                $this->db->query(
+                    'UPDATE tickets SET estatus = ?, id_tecnico = ?, fecha_asignacion = COALESCE(fecha_asignacion, NOW()) WHERE id_ticket = ?',
+                    [$estatus, $idTecnicoNuevo, $id]
+                );
+
+                error_log("✅ Ticket #$id reasignado: estado='$estatus', técnico anterior={$ticketOld['id_tecnico']}, técnico nuevo=$idTecnicoNuevo");
+
+                // Enviar correo de asignación
+                try {
+                    $stmtTecnico = $this->db->query(
+                        'SELECT id_usuario, nombre, correo FROM usuarios WHERE id_usuario = ?',
+                        [$idTecnicoNuevo]
+                    );
+                    $tecnicoNuevo = $stmtTecnico->fetch();
+
+                    if ($tecnicoNuevo && $ticketOld) {
+                        $ticketData = [
+                            'id' => $id,
+                            'categoria' => $ticketOld['categoria'],
+                            'subcategoria' => $ticketOld['subcategoria'],
+                            'descripcion' => '',
+                            'prioridad' => 'Media'
+                        ];
+
+                         $emailService = new EmailService();
+                         $emailService->sendTicketAssignedNotification(
+                             $ticketData,
+                             ['nombre' => $tecnicoNuevo['nombre'], 'email' => $tecnicoNuevo['correo']],
+                             ['nombre' => $ticketOld['empleado_nombre'], 'email' => $ticketOld['empleado_correo']]
+                         );
+                         error_log("📧 Correos de asignación manual enviados para ticket #$id");
+                    }
+                } catch (\Exception $e) {
+                    error_log("⚠️ Error enviando correos de asignación manual para ticket #$id: " . $e->getMessage());
+                }
+
+                // ============================================
+                // CREAR NOTIFICACIONES DE ASIGNACIÓN MANUAL - SIEMPRE
+                // ============================================
+                try {
+                    error_log("📧 [NOTIFICACIONES] Creando notificaciones de asignación manual para ticket #$id");
+
+                    if ($idTecnicoNuevo && isset($ticketOld['empleado_id']) && $ticketOld['empleado_id'] > 0) {
+                        // Notificar al técnico asignado
+                        $resultTec = $this->crearNotificacionInterna(
+                            $idTecnicoNuevo,
+                            $id,
+                            "Se te ha asignado manualmente el ticket #$id"
+                        );
+                        error_log($resultTec ? "✅ [NOTIFICACIONES] Notificación asignación técnico OK" : "❌ [NOTIFICACIONES] Notificación asignación técnico FALLÓ");
+
+                        // Obtener nombre del técnico
+                        $nombreTecnico = 'el técnico asignado';
+                        try {
+                            $stmtTec = $this->db->query('SELECT nombre FROM usuarios WHERE id_usuario = ?', [$idTecnicoNuevo]);
+                            $tecData = $stmtTec->fetch();
+                            if ($tecData && !empty($tecData['nombre'])) {
+                                $nombreTecnico = $tecData['nombre'];
+                            }
+                        } catch (\Exception $e) {
+                            error_log("⚠️ No se pudo obtener nombre del técnico: " . $e->getMessage());
+                        }
+
+                        // Notificar al empleado
+                        $resultEmp = $this->crearNotificacionInterna(
+                            $ticketOld['empleado_id'],
+                            $id,
+                            "Tu ticket #$id ha sido asignado al técnico $nombreTecnico"
+                        );
+                        error_log($resultEmp ? "✅ [NOTIFICACIONES] Notificación asignación empleado OK" : "❌ [NOTIFICACIONES] Notificación asignación empleado FALLÓ");
+                    } else {
+                        error_log("⚠️ [NOTIFICACIONES] No se pueden crear notificaciones: datos inválidos");
+                    }
+                } catch (\Exception $e) {
+                    error_log("❌ [NOTIFICACIONES] Error crítico creando notificaciones de asignación manual: " . $e->getMessage());
+                }
+            } else if ($estatus !== 'Pendiente' && $estatus !== 'En Progreso' && $estatus !== 'En proceso' && $estatus !== 'Finalizado') {
+                // Solo cambio de estado (para otros estados que no requieren lógica especial)
+                $this->db->query(
+                    'UPDATE tickets SET estatus = ? WHERE id_ticket = ?',
+                    [$estatus, $id]
+                );
+            } else if ($esReapertura && $estatus === 'Pendiente') {
+                // Cuando se reabre un ticket a "Pendiente", actualizar el estado sin requerir motivo/tiempo
+                // IMPORTANTE: NO reiniciar fecha_inicio_atencion - mantener la fecha original para que el tiempo continúe desde donde se quedó
+                // Solo reiniciar tiempo_atencion_segundos si existe (para que se recalcule desde la reapertura cuando se finalice)
+                $this->db->query(
+                    'UPDATE tickets SET estatus = ?, tiempo_atencion_segundos = NULL WHERE id_ticket = ?',
+                    [$estatus, $id]
+                );
+                error_log("✅ Ticket #$id reabierto a estado Pendiente (tiempo_atencion_segundos reiniciado para nuevo cálculo)");
+            }
+
+            // ============================================
+            // CREAR NOTIFICACIONES DE CAMBIO DE ESTADO - ANTES de enviar respuesta
+            // ============================================
+            if ($estadoAnterior !== $estatus) {
+                try {
+                    error_log("📧 [NOTIFICACIONES] Creando notificaciones de cambio de estado para ticket #$id");
+
+                    if (!isset($ticketOld['empleado_id']) || !$ticketOld['empleado_id']) {
+                        error_log("⚠️ [NOTIFICACIONES] No se puede crear: empleado_id inválido");
+                    } else {
+                        $esReapertura = ($estadoAnterior === 'Finalizado' || $estadoAnterior === 'Cerrado') &&
+                                       ($estatus !== 'Finalizado' && $estatus !== 'Cerrado');
+
+                        if ($esReapertura) {
+                            // Notificación especial para reapertura
+                            $mensajeEmpleado = "Tu ticket #$id ha sido reabierto. Estado: $estatus";
+                            $resultEmp = $this->crearNotificacionInterna($ticketOld['empleado_id'], $id, $mensajeEmpleado);
+                            error_log($resultEmp ? "✅ [NOTIFICACIONES] Notificación reapertura empleado OK" : "❌ [NOTIFICACIONES] Notificación reapertura empleado FALLÓ");
+
+                            // Notificar al técnico si está asignado
+                            if (isset($ticketOld['id_tecnico']) && $ticketOld['id_tecnico'] > 0) {
+                                $mensajeTecnico = "El ticket #$id ha sido reabierto por el usuario";
+                                $resultTec = $this->crearNotificacionInterna($ticketOld['id_tecnico'], $id, $mensajeTecnico);
+                                error_log($resultTec ? "✅ [NOTIFICACIONES] Notificación reapertura técnico OK" : "❌ [NOTIFICACIONES] Notificación reapertura técnico FALLÓ");
+                            }
+                        } else {
+                            // Notificación normal de cambio de estado - NOTIFICAR A TODOS LOS USUARIOS RELEVANTES
+                            // 1. SIEMPRE notificar al empleado propietario del ticket
+                            $mensajeEmpleado = "El estado de tu ticket #$id ha cambiado de \"$estadoAnterior\" a \"$estatus\"";
+
+                            // Mensajes más específicos según el estado
+                            if ($estatus === 'En Progreso' || $estatus === 'En proceso') {
+                                $mensajeEmpleado = "Tu ticket #$id está ahora en progreso. El técnico asignado está trabajando en tu solicitud.";
+                            } elseif ($estatus === 'Pendiente') {
+                                $mensajeEmpleado = "Tu ticket #$id ha sido marcado como Pendiente. Se retomará según el tiempo estimado proporcionado.";
+                            } elseif ($estatus === 'Finalizado') {
+                                $mensajeEmpleado = "Tu ticket #$id ha sido finalizado. Por favor, completa la evaluación.";
+                            } elseif ($estatus === 'Escalado') {
+                                $mensajeEmpleado = "Tu ticket #$id ha sido escalado a un técnico de mayor nivel para su atención.";
+                            }
+
+                            $resultEmp = $this->crearNotificacionInterna($ticketOld['empleado_id'], $id, $mensajeEmpleado);
+                            if ($resultEmp) {
+                                error_log("✅ [NOTIFICACIONES] Notificación cambio estado empleado #{$ticketOld['empleado_id']} OK - Mensaje: " . substr($mensajeEmpleado, 0, 50));
+                            } else {
+                                error_log("❌ [NOTIFICACIONES] Notificación cambio estado empleado #{$ticketOld['empleado_id']} FALLÓ");
+                            }
+
+                            // 2. SIEMPRE notificar al técnico asignado (si existe y es diferente del empleado)
+                            // Para tickets finalizados, asegurar que se notifique al técnico incluso si es el mismo que el empleado
+                            $idTecnicoActual = $idTecnicoNuevo ?? $ticketOld['id_tecnico'] ?? null;
+
+                            // Si el estado es Finalizado y hay un técnico asignado, asegurar notificación
+                            if ($estatus === 'Finalizado' && $idTecnicoActual && $idTecnicoActual > 0) {
+                                $mensajeTecnico = "El ticket #$id ha sido finalizado. Esperando evaluación del usuario.";
+                                $resultTec = $this->crearNotificacionInterna($idTecnicoActual, $id, $mensajeTecnico);
+                                if ($resultTec) {
+                                    error_log("✅ [NOTIFICACIONES] Notificación finalización técnico #{$idTecnicoActual} OK");
+                                } else {
+                                    error_log("❌ [NOTIFICACIONES] Notificación finalización técnico #{$idTecnicoActual} FALLÓ");
+                                }
+                            } elseif ($idTecnicoActual && $idTecnicoActual > 0 && $idTecnicoActual != $ticketOld['empleado_id']) {
+                                $mensajeTecnico = "El ticket #$id ha cambiado de estado de \"$estadoAnterior\" a \"$estatus\"";
+
+                                // IMPORTANTE: NO notificar al técnico cuando se escala
+                                // El escalamiento tiene su propio método (escalateTicket) que maneja las notificaciones
+                                // Solo notificar cuando NO es un escalamiento
+                                if ($estatus !== 'Escalado') {
+                                    // Mensajes más específicos para el técnico
+                                    if ($estatus === 'En Progreso' || $estatus === 'En proceso') {
+                                        $mensajeTecnico = "El ticket #$id está ahora en progreso. Continúa trabajando en él.";
+                                    } elseif ($estatus === 'Pendiente') {
+                                        $mensajeTecnico = "El ticket #$id ha sido marcado como Pendiente. Se retomará según el tiempo estimado.";
+                                    } elseif ($estatus === 'Finalizado') {
+                                        $mensajeTecnico = "El ticket #$id ha sido finalizado. Esperando evaluación del usuario.";
+                                    }
+
+                                    $resultTec = $this->crearNotificacionInterna($idTecnicoActual, $id, $mensajeTecnico);
+                                    error_log($resultTec ? "✅ [NOTIFICACIONES] Notificación cambio estado técnico #{$idTecnicoActual} OK" : "❌ [NOTIFICACIONES] Notificación cambio estado técnico FALLÓ");
+                                } else {
+                                    error_log("ℹ️ [NOTIFICACIONES] Estado es 'Escalado' - Las notificaciones se manejan en el método escalateTicket, no aquí");
+                                }
+                            } else {
+                                if ($estatus !== 'Finalizado') {
+                                    error_log("⚠️ [NOTIFICACIONES] No se notifica al técnico: idTecnicoActual=$idTecnicoActual, empleado_id={$ticketOld['empleado_id']}, estatus=$estatus");
+                                }
+                            }
+                        }
+
+                        // NOTA: No se notifica a todos los administradores en escalamientos
+                        // Solo el técnico destino recibe la notificación (que puede ser un administrador si es el destinatario)
+                    }
+                } catch (\Exception $e) {
+                    error_log("❌ [NOTIFICACIONES] Error crítico creando notificaciones de cambio de estado para ticket #$id: " . $e->getMessage());
+                    error_log("❌ [NOTIFICACIONES] Stack trace: " . $e->getTraceAsString());
+                    // NO bloquear la respuesta si fallan las notificaciones
+                }
+            }
+
+            // Obtener datos actualizados del ticket para la respuesta
+            // Si falla, usar los datos que ya tenemos
+            try {
+                $stmtUpdated = $this->db->query(
+                    'SELECT estatus, pendiente_motivo, pendiente_tiempo_estimado, pendiente_actualizado_en, fecha_finalizacion, fecha_cierre FROM tickets WHERE id_ticket = ?',
+                    [$id]
+                );
+                $ticketUpdated = $stmtUpdated->fetch();
+
+                if (!$ticketUpdated) {
+                    error_log("⚠️ No se encontraron datos actualizados para ticket #$id después de actualizar estado");
+                    // Usar el estado que se intentó establecer
+                    $ticketUpdated = ['estatus' => $estatus];
+                }
+            } catch (\Exception $e) {
+                error_log("⚠️ Error obteniendo datos actualizados del ticket #$id: " . $e->getMessage());
+                error_log("⚠️ Stack trace: " . $e->getTraceAsString());
+                // Usar datos por defecto si falla la consulta
+                $ticketUpdated = ['estatus' => $estatus];
+            }
+
+            // Obtener información de reapertura si existe
+            $reaperturaInfo = null;
+            if ($esReapertura) {
+                try {
+                    $stmtReapertura = $this->db->query(
+                        'SELECT id_reapertura, observaciones_usuario, causa_tecnico, fecha_reapertura, estado_reapertura
+                         FROM ticketreaperturas
+                         WHERE id_ticket = ?
+                         ORDER BY fecha_reapertura DESC
+                         LIMIT 1',
+                        [$id]
+                    );
+                    $reaperturaData = $stmtReapertura->fetch();
+                    if ($reaperturaData) {
+                        $reaperturaInfo = [
+                            'id' => (int)$reaperturaData['id_reapertura'],
+                            'observacionesUsuario' => $reaperturaData['observaciones_usuario'] ?? null,
+                            'causaTecnico' => $reaperturaData['causa_tecnico'] ?? null,
+                            'fechaReapertura' => $reaperturaData['fecha_reapertura'] ?? null,
+                            'estadoReapertura' => $reaperturaData['estado_reapertura'] ?? null
+                        ];
+                    }
+                } catch (\Exception $e) {
+                    error_log("⚠️ Error obteniendo información de reapertura para ticket #$id: " . $e->getMessage());
+                }
+            }
+
+            // Preparar respuesta completa con todos los campos que el frontend espera
+            $response = [
+                'message' => 'Estado actualizado exitosamente',
+                'estatus' => $ticketUpdated['estatus'] ?? $estatus,
+                'pendienteMotivo' => $ticketUpdated['pendiente_motivo'] ?? null,
+                'pendienteTiempoEstimado' => $ticketUpdated['pendiente_tiempo_estimado'] ?? null,
+                'pendienteActualizadoEn' => $ticketUpdated['pendiente_actualizado_en'] ?? null,
+                'reapertura' => $reaperturaInfo
+            ];
+
+            // Agregar información adicional para tickets finalizados
+            if ($estatus === 'Finalizado') {
+                $response['fechaFinalizacion'] = $ticketUpdated['fecha_finalizacion'] ?? null;
+                $response['fechaCierre'] = $ticketUpdated['fecha_cierre'] ?? null;
+            }
+
+            // ENVIAR RESPUESTA DESPUÉS de crear las notificaciones
+            error_log("✅ Ticket #$id actualizado a estado: $estatus - Enviando respuesta exitosa");
+            AuthMiddleware::sendResponse($response);
+
+            // Enviar correo de cambio de estado si cambió (DESPUÉS de enviar respuesta, no bloquea)
+            if ($estadoAnterior !== $estatus) {
+                try {
+                    // Validar que tenemos los datos necesarios
+                    if (!empty($ticketOld['empleado_correo'])) {
+                        $ticketData = [
+                            'id' => $id,
+                            'categoria' => $ticketOld['categoria'] ?? 'N/A',
+                            'subcategoria' => $ticketOld['subcategoria'] ?? 'N/A'
+                        ];
+
+                        $technician = null;
+                        if ($ticketOld['id_tecnico'] && !empty($ticketOld['tecnico_correo'])) {
+                            $technician = [
+                                'nombre' => $ticketOld['tecnico_nombre'] ?? 'Técnico',
+                                'email' => $ticketOld['tecnico_correo']
+                            ];
+                        }
+
+                        $employee = [
+                            'nombre' => $ticketOld['empleado_nombre'] ?? 'Usuario',
+                            'email' => $ticketOld['empleado_correo']
+                        ];
+
+                         $emailService = new EmailService();
+                         $emailService->sendTicketStatusChangeNotification($ticketData, $estatus, $estadoAnterior, $technician, $employee);
+                         error_log("✅ [CORREOS] Correo de cambio de estado enviado para ticket #$id");
+                     } else {
+                         error_log("⚠️ [CORREOS] No se puede enviar correo: empleado_correo vacío para ticket #$id");
+                     }
+                 } catch (\Exception $e) {
+                     error_log("❌ [CORREOS] Error enviando correo de cambio de estado para ticket #$id: " . $e->getMessage());
+                     error_log("❌ [CORREOS] Stack trace: " . $e->getTraceAsString());
+                     error_log("⚠️ Error enviando correo de cambio de estado para ticket #$id: " . $e->getMessage());
+                 }
+
+                 // Las notificaciones ya se crearon antes de enviar la respuesta
+            }
+        } catch (\Exception $e) {
+            error_log('❌ [ERROR] Error updating ticket status: ' . $e->getMessage());
+            error_log('❌ [ERROR] Stack trace: ' . $e->getTraceAsString());
+            error_log('❌ [ERROR] File: ' . $e->getFile() . ' Line: ' . $e->getLine());
+            AuthMiddleware::sendError('Error al actualizar el estado del ticket: ' . $e->getMessage(), 500);
+        }
+    }
+    public function closeTicket($id)
+    {
+        $user = AuthMiddleware::authenticate();
+        $body = AuthMiddleware::getRequestBody();
+
+        // Aceptar ambos formatos (rating/calificacion y comentarios/comentario)
+        $rating = $body['rating']
+            ?? $body['calificacion']
+            ?? 0;
+
+        $comentarios = $body['comentarios']
+            ?? $body['comentario']
+            ?? '';
+
+        if ($rating < 1 || $rating > 5) {
+            AuthMiddleware::sendError('La calificación debe ser entre 1 y 5 estrellas', 400);
+            return;
+        }
+
+        try {
+            // Verificar que el ticket existe y obtener información
+            $stmtTicket = $this->db->query(
+                'SELECT id_ticket, id_usuario, id_tecnico, estatus FROM tickets WHERE id_ticket = ?',
+                [$id]
+            );
+            $ticket = $stmtTicket->fetch();
+
+            if (!$ticket) {
+                AuthMiddleware::sendError('El ticket no existe', 404);
+                return;
+            }
+
+            // Verificar permisos: el usuario puede cerrar si es el propietario, el técnico asignado, o es administrador/tecnico
+            $canClose = false;
+            if ($ticket['id_usuario'] == $user['id_usuario']) {
+                $canClose = true; // El propietario puede cerrar
+            } elseif (($user['rol'] === 'tecnico' || $user['rol'] === 'administrador') &&
+                     ($ticket['id_tecnico'] == $user['id_usuario'] || $user['rol'] === 'administrador')) {
+                $canClose = true; // Técnico asignado o administrador puede cerrar
+            }
+
+            if (!$canClose) {
+                AuthMiddleware::sendError('No tienes permiso para cerrar este ticket', 403);
+                return;
+            }
+
+            // Close ticket - ESTO ES LO MÁS IMPORTANTE
+            $this->db->query(
+                'UPDATE tickets SET estatus = "Cerrado", fecha_cierre = NOW() WHERE id_ticket = ?',
+                [$id]
+            );
+
+            // OPERACIONES OPCIONALES después de cerrar el ticket
+            // Todas están protegidas para que NO afecten la respuesta exitosa
+            try {
+                // Verificar si el ticket tiene una reapertura activa (última reapertura)
+                $stmtReapertura = $this->db->query(
+                    'SELECT id_reapertura, id_ticket
+                     FROM ticketreaperturas
+                     WHERE id_ticket = ?
+                     ORDER BY fecha_reapertura DESC, id_reapertura DESC
+                     LIMIT 1',
+                    [$id]
+                );
+                $reapertura = $stmtReapertura->fetch();
+
+                if ($reapertura && !empty($reapertura['id_reapertura'])) {
+                    // Ticket reabierto: insertar evaluación en evaluaciones_reaperturas
+                    try {
+                        $this->db->query(
+                            'INSERT INTO evaluaciones_reaperturas (id_reapertura, id_ticket, calificacion, comentario, fecha_evaluacion)
+                             VALUES (?, ?, ?, ?, NOW())
+                             ON DUPLICATE KEY UPDATE
+                                calificacion = VALUES(calificacion),
+                                comentario = VALUES(comentario),
+                                fecha_evaluacion = NOW()',
+                            [$reapertura['id_reapertura'], $id, $rating, $comentarios]
+                        );
+                        error_log("✅ Evaluación insertada en evaluaciones_reaperturas para ticket #$id (reapertura #{$reapertura['id_reapertura']})");
+                    } catch (\Throwable $e) {
+                        error_log("⚠️ Error insertando evaluación en evaluaciones_reaperturas para ticket #$id: " . $e->getMessage());
+                        // Fallback: intentar insertar en evaluaciones normal
+                        try {
+                            $this->db->query(
+                                'INSERT INTO evaluaciones (id_ticket, calificacion, comentario, fecha_evaluacion)
+                                 VALUES (?, ?, ?, NOW())
+                                 ON DUPLICATE KEY UPDATE
+                                    calificacion = VALUES(calificacion),
+                                    comentario = VALUES(comentario),
+                                    fecha_evaluacion = NOW()',
+                                [$id, $rating, $comentarios]
+                            );
+                            error_log("✅ Evaluación insertada en evaluaciones (fallback) para ticket #$id");
+                        } catch (\Throwable $e2) {
+                            error_log("⚠️ Error en fallback insertando evaluación para ticket #$id: " . $e2->getMessage());
+                        }
+                    }
+                } else {
+                    // Ticket normal (no reabierto): insertar en evaluaciones normal
+                    $this->db->query(
+                        'INSERT INTO evaluaciones (id_ticket, calificacion, comentario, fecha_evaluacion)
+                         VALUES (?, ?, ?, NOW())
+                         ON DUPLICATE KEY UPDATE
+                            calificacion = VALUES(calificacion),
+                            comentario = VALUES(comentario),
+                            fecha_evaluacion = NOW()',
+                        [$id, $rating, $comentarios]
+                    );
+                    error_log("✅ Evaluación insertada en evaluaciones para ticket #$id (ticket normal)");
+                }
+            } catch (\Throwable $e) {
+                // Capturar cualquier error (Exception o Error) pero no afectar la respuesta
+                error_log("⚠️ Error insertando evaluación del ticket #$id: " . $e->getMessage());
+            }
+
+            // ENVIAR RESPUESTA EXITOSA - esto NUNCA debe fallar
+            // Se envía inmediatamente después de cerrar el ticket
+            AuthMiddleware::sendResponse(['message' => 'Ticket cerrado exitosamente']);
+
+            // Intentar enviar correo DESPUÉS de enviar la respuesta (no bloquea)
+            try {
+                // Obtener información completa del ticket y empleado para el correo
+                $stmtTicketInfo = $this->db->query(
+                    'SELECT t.id_ticket, s.categoria, s.subcategoria, u.id_usuario as empleado_id, u.nombre as empleado_nombre, u.correo as empleado_correo
+                     FROM tickets t
+                     JOIN servicios s ON t.id_servicio = s.id_servicio
+                     JOIN usuarios u ON t.id_usuario = u.id_usuario
+                     WHERE t.id_ticket = ?',
+                    [$id]
+                );
+                $ticketInfo = $stmtTicketInfo->fetch();
+
+                if ($ticketInfo && !empty($ticketInfo['empleado_correo'])) {
+                    // Validar que el correo sea válido
+                    if (filter_var($ticketInfo['empleado_correo'], FILTER_VALIDATE_EMAIL)) {
+                        try {
+                            $ticketData = [
+                                'id' => $ticketInfo['id_ticket'],
+                                'categoria' => $ticketInfo['categoria'],
+                                'subcategoria' => $ticketInfo['subcategoria']
+                            ];
+
+                            $employee = [
+                                'nombre' => $ticketInfo['empleado_nombre'],
+                                'email' => $ticketInfo['empleado_correo']
+                            ];
+
+                            error_log("📧 Preparando envío de correo de cierre para ticket #$id");
+                            $emailService = new EmailService();
+                            $emailService->sendTicketClosedNotification($ticketData, $employee);
+                            error_log("✅ [CORREOS] Correo de cierre enviado para ticket #$id");
+                        } catch (\Exception $e) {
+                            error_log("❌ [CORREOS] Error enviando correo de cierre para ticket #$id: " . $e->getMessage());
+                            error_log("❌ [CORREOS] Stack trace: " . $e->getTraceAsString());
+                        }
+                    } else {
+                        error_log("⚠️ [CORREOS] Correo del empleado inválido para ticket #$id: {$ticketInfo['empleado_correo']}");
+                    }
+                } else {
+                    error_log("⚠️ No se puede enviar correo: empleado_correo vacío o ticket no encontrado para ticket #$id");
+                }
+            } catch (\Exception $e) {
+                error_log("⚠️ Error enviando correo de cierre para ticket #$id (no crítico): " . $e->getMessage());
+            }
+
+             // ============================================
+             // CREAR NOTIFICACIÓN DE CIERRE - SIEMPRE (independiente de correos)
+             // ============================================
+             try {
+                 error_log("📧 [NOTIFICACIONES] Creando notificación de cierre para ticket #$id");
+
+                 // Obtener información del ticket si no la tenemos
+                 if (!isset($ticketInfo)) {
+                     $stmtTicketInfo = $this->db->query(
+                         'SELECT t.id_ticket, u.id_usuario as empleado_id
+                          FROM tickets t
+                          JOIN usuarios u ON t.id_usuario = u.id_usuario
+                          WHERE t.id_ticket = ?',
+                         [$id]
+                     );
+                     $ticketInfo = $stmtTicketInfo->fetch();
+                 }
+
+                 if ($ticketInfo && isset($ticketInfo['empleado_id']) && $ticketInfo['empleado_id'] > 0) {
+                     $result = $this->crearNotificacionInterna(
+                         $ticketInfo['empleado_id'],
+                         $id,
+                         "Tu ticket #$id ha sido cerrado"
+                     );
+                     error_log($result ? "✅ [NOTIFICACIONES] Notificación cierre OK" : "❌ [NOTIFICACIONES] Notificación cierre FALLÓ");
+                 } else {
+                     error_log("⚠️ [NOTIFICACIONES] No se puede crear notificación de cierre: ticketInfo o empleado_id inválido");
+                 }
+             } catch (\Exception $e) {
+                 error_log("❌ [NOTIFICACIONES] Error crítico creando notificación de cierre para ticket #$id: " . $e->getMessage());
+             }
+
+        } catch (\Exception $e) {
+            error_log('❌ Error closing ticket #' . $id . ': ' . $e->getMessage());
+            error_log('❌ Stack trace: ' . $e->getTraceAsString());
+            error_log('❌ File: ' . $e->getFile() . ' Line: ' . $e->getLine());
+            AuthMiddleware::sendError('Error interno del servidor: ' . $e->getMessage(), 500);
+        } catch (\Throwable $e) {
+            // Capturar cualquier otro tipo de error (fatal errors, etc.)
+            error_log('❌ Fatal error closing ticket #' . $id . ': ' . $e->getMessage());
+            error_log('❌ Stack trace: ' . $e->getTraceAsString());
+            AuthMiddleware::sendError('Error interno del servidor', 500);
+        }
+    }
+    public function evaluateTicket($id)
+    {
+        $user = AuthMiddleware::authenticate();
+        $body = AuthMiddleware::getRequestBody();
+
+        $calificacion = $body['calificacion'] ?? 0;
+        $comentario = $body['comentario'] ?? '';
+
+        if ($calificacion < 1 || $calificacion > 5) {
+            AuthMiddleware::sendError('La calificación debe ser entre 1 y 5', 400);
+            return;
+        }
+
+        try {
+            // Verificar que el ticket existe y que el usuario tiene permiso para evaluarlo
+            $stmtTicket = $this->db->query(
+                'SELECT id_ticket, id_usuario FROM tickets WHERE id_ticket = ?',
+                [$id]
+            );
+            $ticket = $stmtTicket->fetch();
+
+            if (!$ticket) {
+                AuthMiddleware::sendError('El ticket no existe', 404);
+                return;
+            }
+
+            // Solo el propietario del ticket puede evaluarlo
+            if ($ticket['id_usuario'] != $user['id_usuario']) {
+                AuthMiddleware::sendError('No tienes permiso para evaluar este ticket', 403);
+                return;
+            }
+
+            // Verificar el estado actual del ticket
+            $stmtTicketStatus = $this->db->query(
+                'SELECT estatus FROM tickets WHERE id_ticket = ?',
+                [$id]
+            );
+            $ticketStatus = $stmtTicketStatus->fetch();
+
+            // Si el ticket está finalizado, cerrarlo al evaluarlo
+            if ($ticketStatus && $ticketStatus['estatus'] === 'Finalizado') {
+                $this->db->query(
+                    'UPDATE tickets SET estatus = "Cerrado", fecha_cierre = COALESCE(fecha_cierre, NOW()) WHERE id_ticket = ?',
+                    [$id]
+                );
+            }
+
+            // Verificar si el ticket ha sido reabierto
+            $stmtReapertura = $this->db->query(
+                'SELECT id_reapertura, fecha_reapertura FROM ticketreaperturas
+                 WHERE id_ticket = ?
+                 ORDER BY fecha_reapertura DESC
+                 LIMIT 1',
+                [$id]
+            );
+            $reapertura = $stmtReapertura->fetch();
+
+            // Verificar si existe una evaluación previa para sobrescribir
+            if ($reapertura) {
+                // Si el ticket fue reabierto, buscar la evaluación más reciente (la que queremos actualizar)
+                // Buscar todas las evaluaciones y tomar la más reciente para actualizarla
+                $stmtEval = $this->db->query(
+                    'SELECT id_evaluacion FROM evaluaciones
+                     WHERE id_ticket = ?
+                     ORDER BY fecha_evaluacion DESC
+                     LIMIT 1',
+                    [$id]
+                );
+                $evaluacionExistente = $stmtEval->fetch();
+
+                if ($evaluacionExistente) {
+                    // Actualizar la evaluación existente (sobrescribir la evaluación anterior)
+                    $this->db->query(
+                        'UPDATE evaluaciones
+                         SET calificacion = ?, comentario = ?, fecha_evaluacion = NOW()
+                         WHERE id_evaluacion = ?',
+                        [$calificacion, $comentario, $evaluacionExistente['id_evaluacion']]
+                    );
+                } else {
+                    // Si no existe evaluación previa, crear una nueva
+                    $this->db->query(
+                        'INSERT INTO evaluaciones (id_ticket, calificacion, comentario, fecha_evaluacion)
+                         VALUES (?, ?, ?, NOW())',
+                        [$id, $calificacion, $comentario]
+                    );
+                }
+            } else {
+                // Si el ticket no fue reabierto, crear una nueva evaluación
+                $this->db->query(
+                    'INSERT INTO evaluaciones (id_ticket, calificacion, comentario, fecha_evaluacion)
+                     VALUES (?, ?, ?, NOW())',
+                    [$id, $calificacion, $comentario]
+                );
+            }
+
+            AuthMiddleware::sendResponse(['message' => 'Evaluación registrada exitosamente']);
+        } catch (\Exception $e) {
+            error_log('Error evaluating ticket: ' . $e->getMessage());
+            AuthMiddleware::sendError('Error interno del servidor', 500);
+        }
+    }
+
+    /**
+     * GET /tickets/reopened
+     * Get reopened tickets
+     */
+    public function getReopenedTickets()
+    {
+        $user = AuthMiddleware::authenticate();
+
+        // Obtener parámetros de paginación
+        $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
+        $limit = isset($_GET['limit']) ? max(1, min(100, (int)$_GET['limit'])) : 10;
+        $offset = ($page - 1) * $limit;
+
+        try {
+            // Different query based on user role
+            if ($user['rol'] === 'empleado') {
+                // Contar total - Solo contar tickets únicos (no reaperturas duplicadas)
+                $stmtCount = $this->db->query(
+                    'SELECT COUNT(DISTINCT t.id_ticket) as total
+                     FROM tickets t
+                     INNER JOIN (
+                         SELECT tr1.id_ticket
+                         FROM ticketreaperturas tr1
+                         INNER JOIN (
+                             SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                             FROM ticketreaperturas
+                             GROUP BY id_ticket
+                         ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                     ) tr ON t.id_ticket = tr.id_ticket
+                     WHERE t.id_usuario = ?',
+                    [$user['id_usuario']]
+                );
+                $countResult = $stmtCount->fetch();
+                $total = (int)$countResult['total'];
+
+                try {
+                    $stmt = $this->db->query(
+                        'SELECT t.id_ticket as id, s.categoria, s.subcategoria, t.descripcion,
+                                s.tiempo_objetivo as tiempo_estimado, t.estatus as estado, t.prioridad,
+                                t.fecha_creacion, t.fecha_cierre, tr.observaciones_usuario,
+                                tr.causa_tecnico, tr.fecha_reapertura, tr.id_reapertura,
+                                u_creador.id_usuario as usuario_id_usuario,
+                                u_creador.nombre as usuario_nombre,
+                                u_creador.correo as usuario_correo,
+                                u_creador.departamento as usuario_departamento,
+                                u.id_usuario as tecnico_id_usuario,
+                                u.nombre as tecnico_nombre,
+                                u.correo as tecnico_correo,
+                                u.departamento as tecnico_departamento
+                         FROM tickets t
+                         JOIN servicios s ON t.id_servicio = s.id_servicio
+                         INNER JOIN (
+                             SELECT tr1.*
+                             FROM ticketreaperturas tr1
+                             INNER JOIN (
+                                 SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                                 FROM ticketreaperturas
+                                 GROUP BY id_ticket
+                             ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                         ) tr ON t.id_ticket = tr.id_ticket
+                         LEFT JOIN usuarios u_creador ON t.id_usuario = u_creador.id_usuario
+                         LEFT JOIN usuarios u ON t.id_tecnico = u.id_usuario
+                         WHERE t.id_usuario = ?
+                         ORDER BY tr.fecha_reapertura DESC
+                         LIMIT ? OFFSET ?',
+                        [$user['id_usuario'], $limit, $offset]
+                    );
+                } catch (\Exception $e) {
+                    error_log('❌ Error en consulta SQL para empleados (getReopenedTickets): ' . $e->getMessage());
+                    // Intentar consulta más simple sin JOINs de usuarios
+                    $stmt = $this->db->query(
+                        'SELECT t.id_ticket as id, s.categoria, s.subcategoria, t.descripcion,
+                                s.tiempo_objetivo as tiempo_estimado, t.estatus as estado, t.prioridad,
+                                t.fecha_creacion, t.fecha_cierre, tr.observaciones_usuario,
+                                tr.causa_tecnico, tr.fecha_reapertura, tr.id_reapertura
+                         FROM tickets t
+                         JOIN servicios s ON t.id_servicio = s.id_servicio
+                         INNER JOIN (
+                             SELECT tr1.*
+                             FROM ticketreaperturas tr1
+                             INNER JOIN (
+                                 SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                                 FROM ticketreaperturas
+                                 GROUP BY id_ticket
+                             ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                         ) tr ON t.id_ticket = tr.id_ticket
+                         WHERE t.id_usuario = ?
+                         ORDER BY tr.fecha_reapertura DESC
+                         LIMIT ? OFFSET ?',
+                        [$user['id_usuario'], $limit, $offset]
+                    );
+                }
+            } else if ($user['rol'] === 'tecnico' || $user['rol'] === 'administrador') {
+                // Contar total - Solo contar tickets únicos (no reaperturas duplicadas)
+                $stmtCount = $this->db->query(
+                    'SELECT COUNT(DISTINCT t.id_ticket) as total
+                     FROM tickets t
+                     INNER JOIN (
+                         SELECT tr1.id_ticket, tr1.tecnico_id
+                         FROM ticketreaperturas tr1
+                         INNER JOIN (
+                             SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                             FROM ticketreaperturas
+                             GROUP BY id_ticket
+                         ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                     ) tr ON t.id_ticket = tr.id_ticket
+                     WHERE (t.id_tecnico = ? OR tr.tecnico_id = ?)
+                     AND t.estatus != "Escalado"',
+                    [$user['id_usuario'], $user['id_usuario']]
+                );
+                $countResult = $stmtCount->fetch();
+                $total = (int)$countResult['total'];
+
+                try {
+                    $stmt = $this->db->query(
+                        'SELECT t.id_ticket as id, s.categoria, s.subcategoria, t.descripcion,
+                                s.tiempo_objetivo as tiempo_estimado, t.estatus as estado, t.prioridad,
+                                t.fecha_creacion, t.fecha_cierre, tr.observaciones_usuario,
+                                tr.causa_tecnico, tr.fecha_reapertura, tr.id_reapertura,
+                                u_creador.id_usuario as usuario_id_usuario,
+                                u_creador.nombre as usuario_nombre,
+                                u_creador.correo as usuario_correo,
+                                u_creador.departamento as usuario_departamento,
+                                u.id_usuario as tecnico_id_usuario,
+                                u.nombre as tecnico_nombre,
+                                u.correo as tecnico_correo,
+                                u.departamento as tecnico_departamento
+                         FROM tickets t
+                         JOIN servicios s ON t.id_servicio = s.id_servicio
+                         INNER JOIN (
+                             SELECT tr1.*
+                             FROM ticketreaperturas tr1
+                             INNER JOIN (
+                                 SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                                 FROM ticketreaperturas
+                                 GROUP BY id_ticket
+                             ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                         ) tr ON t.id_ticket = tr.id_ticket
+                         LEFT JOIN usuarios u_creador ON t.id_usuario = u_creador.id_usuario
+                         LEFT JOIN usuarios u ON t.id_tecnico = u.id_usuario
+                         WHERE (t.id_tecnico = ? OR tr.tecnico_id = ?)
+                         AND t.estatus != "Escalado"
+                         ORDER BY tr.fecha_reapertura DESC
+                         LIMIT ? OFFSET ?',
+                        [$user['id_usuario'], $user['id_usuario'], $limit, $offset]
+                    );
+                } catch (\Exception $e) {
+                    error_log('❌ Error en consulta SQL para técnicos (getReopenedTickets): ' . $e->getMessage());
+                    // Intentar consulta más simple sin JOINs de usuarios
+                    $stmt = $this->db->query(
+                        'SELECT t.id_ticket as id, s.categoria, s.subcategoria, t.descripcion,
+                                s.tiempo_objetivo as tiempo_estimado, t.estatus as estado, t.prioridad,
+                                t.fecha_creacion, t.fecha_cierre, tr.observaciones_usuario,
+                                tr.causa_tecnico, tr.fecha_reapertura, tr.id_reapertura
+                         FROM tickets t
+                         JOIN servicios s ON t.id_servicio = s.id_servicio
+                         INNER JOIN (
+                             SELECT tr1.*
+                             FROM ticketreaperturas tr1
+                             INNER JOIN (
+                                 SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                                 FROM ticketreaperturas
+                                 GROUP BY id_ticket
+                             ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                         ) tr ON t.id_ticket = tr.id_ticket
+                         WHERE (t.id_tecnico = ? OR tr.tecnico_id = ?)
+                         AND t.estatus != "Escalado"
+                         ORDER BY tr.fecha_reapertura DESC
+                         LIMIT ? OFFSET ?',
+                        [$user['id_usuario'], $user['id_usuario'], $limit, $offset]
+                    );
+                }
+            } else {
+                AuthMiddleware::sendError('Rol de usuario no autorizado', 403);
+                return;
+            }
+
+            $tickets = $stmt->fetchAll();
+
+            // Formatear datos para el frontend (similar a getMyTickets)
+            $formattedTickets = [];
+            foreach ($tickets as $ticket) {
+                try {
+                    // Convertir snake_case a camelCase y estructurar datos
+                    $formattedTicket = [
+                        'id' => isset($ticket['id']) ? (int)$ticket['id'] : null,
+                        'categoria' => $ticket['categoria'] ?? '',
+                        'subcategoria' => $ticket['subcategoria'] ?? '',
+                        'descripcion' => $ticket['descripcion'] ?? '',
+                        'tiempoEstimado' => $ticket['tiempo_estimado'] ?? null,
+                        'tiempoObjetivo' => $ticket['tiempo_estimado'] ?? null,
+                        'estado' => $ticket['estado'] ?? 'Pendiente',
+                        'prioridad' => $ticket['prioridad'] ?? 'Media',
+                        'fechaCreacion' => $ticket['fecha_creacion'] ?? null,
+                        'fechaCierre' => $ticket['fecha_cierre'] ?? null,
+                        'reapertura' => [
+                            'id' => isset($ticket['id_reapertura']) ? (int)$ticket['id_reapertura'] : null,
+                            'observacionesUsuario' => $ticket['observaciones_usuario'] ?? null,
+                            'causaTecnico' => $ticket['causa_tecnico'] ?? null,
+                            'fechaReapertura' => $ticket['fecha_reapertura'] ?? null
+                        ]
+                    ];
+
+                    // Agrupar datos del usuario en objeto usuario
+                    if (!empty($ticket['usuario_nombre'])) {
+                        $formattedTicket['usuario'] = [
+                            'id' => isset($ticket['usuario_id_usuario']) ? (int)$ticket['usuario_id_usuario'] : null,
+                            'nombre' => $ticket['usuario_nombre'] ?? '',
+                            'correo' => $ticket['usuario_correo'] ?? '',
+                            'departamento' => $ticket['usuario_departamento'] ?? null
+                        ];
+                    } else {
+                        $formattedTicket['usuario'] = null;
+                    }
+
+                    // Agrupar datos del técnico si existen
+                    if (!empty($ticket['tecnico_nombre'])) {
+                        $formattedTicket['tecnico'] = [
+                            'id' => isset($ticket['tecnico_id_usuario']) ? (int)$ticket['tecnico_id_usuario'] : null,
+                            'nombre' => $ticket['tecnico_nombre'] ?? '',
+                            'correo' => $ticket['tecnico_correo'] ?? '',
+                            'departamento' => $ticket['tecnico_departamento'] ?? null
+                        ];
+                        $formattedTicket['tecnicoAsignado'] = $ticket['tecnico_nombre'] ?? null;
+                    } else {
+                        $formattedTicket['tecnico'] = null;
+                        $formattedTicket['tecnicoAsignado'] = null;
+                    }
+
+                    // Asegurar que el estado siempre esté presente
+                    if (empty($formattedTicket['estado'])) {
+                        $formattedTicket['estado'] = 'Pendiente';
+                    }
+
+                    $formattedTickets[] = $formattedTicket;
+                } catch (\Exception $e) {
+                    error_log('Error formateando ticket reabierto: ' . $e->getMessage());
+                    continue;
+                }
+            }
+
+            // Calcular información de paginación
+            $totalPages = ceil($total / $limit);
+            $startItem = $total > 0 ? $offset + 1 : 0;
+            $endItem = min($offset + $limit, $total);
+
+            AuthMiddleware::sendResponse([
+                'tickets' => $formattedTickets,
+                'pagination' => [
+                    'total' => $total,
+                    'page' => $page,
+                    'limit' => $limit,
+                    'totalPages' => $totalPages,
+                    'startItem' => $startItem,
+                    'endItem' => $endItem,
+                    'hasNextPage' => $page < $totalPages,
+                    'hasPrevPage' => $page > 1
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            error_log('❌ Error getting reopened tickets: ' . $e->getMessage());
+            error_log('❌ Stack trace: ' . $e->getTraceAsString());
+            error_log('❌ File: ' . $e->getFile() . ' Line: ' . $e->getLine());
+            AuthMiddleware::sendError('Error interno del servidor: ' . $e->getMessage(), 500);
+        }
+    }
+
+    /**
+     * GET /tickets/escalados
+     * Get escalated tickets
+     */
+    public function getEscaladosTickets()
+    {
+        $user = AuthMiddleware::authenticate();
+
+        // Check permissions
+        if ($user['rol'] !== 'tecnico' && $user['rol'] !== 'administrador') {
+            AuthMiddleware::sendError('Solo los técnicos y administradores pueden ver tickets escalados', 403);
+            return;
+        }
+
+        // Obtener parámetros de paginación
+        $page = isset($_GET['page']) ? max(1, (int)$_GET['page']) : 1;
+        $limit = isset($_GET['limit']) ? max(1, min(100, (int)$_GET['limit'])) : 10;
+        $offset = ($page - 1) * $limit;
+
+        try {
+            // Contar total - Tickets escalados donde el usuario es el técnico destino
+            // IMPORTANTE: Mostrar tickets escalados incluso después de ser finalizados
+            // porque el técnico/administrador ya les dio seguimiento
+            // Incluir tickets normales Y tickets reabiertos escalados
+            $stmtCount = $this->db->query(
+                'SELECT COUNT(DISTINCT t.id_ticket) as total
+                 FROM tickets t
+                 INNER JOIN escalamientos e ON t.id_ticket = e.id_ticket
+                    AND e.tecnico_nuevo_id = ?
+                    AND e.fecha_escalamiento = (
+                        SELECT MAX(fecha_escalamiento)
+                        FROM escalamientos
+                        WHERE id_ticket = t.id_ticket
+                    )
+                 LEFT JOIN (
+                     SELECT tr1.id_ticket, tr1.id_reapertura, tr1.tecnico_id
+                     FROM ticketreaperturas tr1
+                     INNER JOIN (
+                         SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                         FROM ticketreaperturas
+                         GROUP BY id_ticket
+                     ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                 ) tr ON tr.id_ticket = t.id_ticket
+                 WHERE t.id_tecnico = ?',
+                [$user['id_usuario'], $user['id_usuario']]
+            );
+            $countResult = $stmtCount->fetch();
+            $total = (int)$countResult['total'];
+
+            // Obtener tickets escalados - Incluir todos los estados (Escalado, Finalizado, Cerrado, etc.)
+            // IMPORTANTE: Mostrar tickets escalados incluso después de ser finalizados
+            // porque el técnico/administrador ya les dio seguimiento
+            // Incluir tickets normales Y tickets reabiertos escalados
+            $stmt = $this->db->query(
+                'SELECT t.id_ticket as id, t.descripcion, t.prioridad, t.fecha_creacion,
+                        t.estatus, s.categoria, s.subcategoria, s.tiempo_objetivo,
+                        t.fecha_asignacion, t.fecha_inicio_atencion, t.fecha_finalizacion,
+                        t.archivo_aprobacion,
+                        u.nombre as usuario_nombre, u.correo as usuario_correo,
+                        tec.nombre as tecnico_nombre, tec.correo as tecnico_correo,
+                        tec_orig.nombre as tecnico_original_nombre,
+                        e.motivo_escalamiento, e.fecha_escalamiento, e.nivel_escalamiento,
+                        e.tecnico_original_id, e.tecnico_nuevo_id,
+                        tr.id_reapertura, tr.observaciones_usuario, tr.causa_tecnico,
+                        tr.fecha_reapertura, tr.fecha_respuesta_tecnico
+                 FROM tickets t
+                 JOIN servicios s ON t.id_servicio = s.id_servicio
+                 JOIN usuarios u ON t.id_usuario = u.id_usuario
+                 LEFT JOIN usuarios tec ON t.id_tecnico = tec.id_usuario
+                 INNER JOIN escalamientos e ON t.id_ticket = e.id_ticket
+                    AND e.tecnico_nuevo_id = ?
+                    AND e.fecha_escalamiento = (
+                        SELECT MAX(fecha_escalamiento)
+                        FROM escalamientos
+                        WHERE id_ticket = t.id_ticket
+                    )
+                 LEFT JOIN usuarios tec_orig ON e.tecnico_original_id = tec_orig.id_usuario
+                 LEFT JOIN (
+                     SELECT tr1.id_ticket, tr1.id_reapertura, tr1.observaciones_usuario,
+                            tr1.causa_tecnico, tr1.fecha_reapertura, tr1.fecha_respuesta_tecnico
+                     FROM ticketreaperturas tr1
+                     INNER JOIN (
+                         SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                         FROM ticketreaperturas
+                         GROUP BY id_ticket
+                     ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                 ) tr ON tr.id_ticket = t.id_ticket
+                 WHERE t.id_tecnico = ?
+                 ORDER BY e.fecha_escalamiento DESC, t.fecha_creacion DESC
+                 LIMIT ? OFFSET ?',
+                [$user['id_usuario'], $user['id_usuario'], $limit, $offset]
+            );
+
+            $tickets = $stmt->fetchAll();
+
+            // Formatear tickets para el frontend
+            $formattedTickets = [];
+            foreach ($tickets as $ticket) {
+                $formattedTicket = [
+                    'id' => (int)$ticket['id'],
+                    'descripcion' => $ticket['descripcion'] ?? '',
+                    'prioridad' => $ticket['prioridad'] ?? 'Media',
+                    'fecha_creacion' => $ticket['fecha_creacion'] ?? null,
+                    'estatus' => $ticket['estatus'] ?? 'Pendiente',
+                    'categoria' => $ticket['categoria'] ?? '',
+                    'subcategoria' => $ticket['subcategoria'] ?? '',
+                    'tiempo_objetivo' => $ticket['tiempo_objetivo'] ?? null,
+                    'archivoAprobacion' => $ticket['archivo_aprobacion'] ?? null,
+                    'usuario' => [
+                        'nombre' => $ticket['usuario_nombre'] ?? '',
+                        'correo' => $ticket['usuario_correo'] ?? ''
+                    ],
+                    'tecnico' => null,
+                    'escalamiento' => [
+                        'motivo' => $ticket['motivo_escalamiento'] ?? null,
+                        'fecha' => !empty($ticket['fecha_escalamiento']) ? $ticket['fecha_escalamiento'] : null,
+                        'nivel' => $ticket['nivel_escalamiento'] ?? null
+                    ]
+                ];
+
+                // Agregar técnico si existe
+                if (!empty($ticket['tecnico_nombre'])) {
+                    $formattedTicket['tecnico'] = [
+                        'nombre' => $ticket['tecnico_nombre'] ?? '',
+                        'correo' => $ticket['tecnico_correo'] ?? ''
+                    ];
+                }
+
+                // Agregar información de reapertura si existe
+                if (!empty($ticket['id_reapertura'])) {
+                    $formattedTicket['reapertura'] = [
+                        'id' => (int)$ticket['id_reapertura'],
+                        'observacionesUsuario' => $ticket['observaciones_usuario'] ?? null,
+                        'causaTecnico' => $ticket['causa_tecnico'] ?? null,
+                        'fechaReapertura' => $ticket['fecha_reapertura'] ?? null,
+                        'fechaRespuestaTecnico' => $ticket['fecha_respuesta_tecnico'] ?? null
+                    ];
+                }
+
+                $formattedTickets[] = $formattedTicket;
+            }
+
+            // Calcular información de paginación
+            $totalPages = ceil($total / $limit);
+            $startItem = $total > 0 ? $offset + 1 : 0;
+            $endItem = min($offset + $limit, $total);
+
+            AuthMiddleware::sendResponse([
+                'tickets' => $formattedTickets,
+                'pagination' => [
+                    'total' => $total,
+                    'page' => $page,
+                    'limit' => $limit,
+                    'totalPages' => $totalPages,
+                    'startItem' => $startItem,
+                    'endItem' => $endItem,
+                    'hasNextPage' => $page < $totalPages,
+                    'hasPrevPage' => $page > 1
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            error_log('Error getting escalated tickets: ' . $e->getMessage());
+            AuthMiddleware::sendError('Error interno del servidor', 500);
+        }
+    }
+
+    /**
+     * GET /tickets/technicians
+     * Get list of technicians
+     */
+    public function getTechnicians()
+    {
+        $user = AuthMiddleware::authenticate();
+
+        // Check permissions
+        $userRol = strtolower(trim($user['rol'] ?? ''));
+        if ($userRol !== 'tecnico' && $userRol !== 'administrador') {
+            AuthMiddleware::sendError('Solo los técnicos y administradores pueden ver la lista de técnicos', 403);
+        }
+
+        try {
+            $stmt = $this->db->query(
+                'SELECT id_usuario as id, nombre, correo, rol
+                 FROM usuarios
+                 WHERE LOWER(TRIM(rol)) IN ("tecnico", "administrador")
+                 ORDER BY nombre ASC'
+            );
+
+            $technicians = $stmt->fetchAll();
+            AuthMiddleware::sendResponse($technicians);
+
+        } catch (\Exception $e) {
+            error_log('Error getting technicians: ' . $e->getMessage());
+            AuthMiddleware::sendError('Error interno del servidor', 500);
+        }
+    }
+
+    /**
+     * GET /tickets/:id/evaluation
+     * Get ticket evaluation
+     */
+    public function getEvaluation($id)
+    {
+        $user = AuthMiddleware::authenticate();
+
+        try {
+            // Check ticket ownership
+            $stmt = $this->db->query(
+                'SELECT id_usuario FROM tickets WHERE id_ticket = ?',
+                [$id]
+            );
+
+            $ticket = $stmt->fetch();
+            if (!$ticket || $ticket['id_usuario'] != $user['id_usuario']) {
+                AuthMiddleware::sendError('Ticket no encontrado', 404);
+            }
+
+            // Get most recent evaluation (allow multiple evaluations for reopened tickets)
+            $stmt = $this->db->query(
+                'SELECT id_evaluacion, calificacion, comentario, fecha_evaluacion
+                 FROM evaluaciones
+                 WHERE id_ticket = ?
+                 ORDER BY fecha_evaluacion DESC
+                 LIMIT 1',
+                [$id]
+            );
+
+            $evaluation = $stmt->fetch();
+
+            if (!$evaluation) {
+                AuthMiddleware::sendError('No se encontró evaluación para este ticket', 404);
+            }
+
+            AuthMiddleware::sendResponse([
+                'id' => $evaluation['id_evaluacion'],
+                'calificacion' => $evaluation['calificacion'],
+                'comentario' => $evaluation['comentario'],
+                'fechaEvaluacion' => $evaluation['fecha_evaluacion']
+            ]);
+
+        } catch (\Exception $e) {
+            error_log('Error getting evaluation: ' . $e->getMessage());
+            AuthMiddleware::sendError('Error interno del servidor', 500);
+        }
+    }
+
+    /**
+     * GET /tickets/:ticketId/approval-letter
+     * Get approval letter file
+     */
+    public function getApprovalLetter($ticketId)
+    {
+        $user = AuthMiddleware::authenticate();
+
+        try {
+            // Validate disposition parameter
+            $allowedDispositions = ['inline', 'attachment'];
+            $requestedDisposition = $_GET['disposition'] ?? 'attachment';
+            $disposition = in_array($requestedDisposition, $allowedDispositions) ? $requestedDisposition : 'attachment';
+
+            $stmt = $this->db->query(
+                'SELECT archivo_aprobacion, id_usuario, id_tecnico FROM tickets WHERE id_ticket = ?',
+                [$ticketId]
+            );
+
+            $ticket = $stmt->fetch();
+
+            if (!$ticket) {
+                AuthMiddleware::sendError('Ticket no encontrado', 404);
+            }
+
+            if (!$ticket['archivo_aprobacion']) {
+                AuthMiddleware::sendError('El ticket no tiene carta de aprobación adjunta', 404);
+            }
+
+            // Check permissions
+            $esCreador = $ticket['id_usuario'] == $user['id_usuario'];
+            $esTecnicoAsignado = $ticket['id_tecnico'] == $user['id_usuario'];
+            $esAdministrador = $user['rol'] === 'administrador';
+
+            if (!$esCreador && !$esTecnicoAsignado && !$esAdministrador) {
+                AuthMiddleware::sendError('No tienes permisos para acceder a esta carta de aprobación', 403);
+            }
+
+            // Validate and sanitize filename to prevent path traversal
+            $filename = basename($ticket['archivo_aprobacion']);
+            if (empty($filename) || $filename !== $ticket['archivo_aprobacion']) {
+                AuthMiddleware::sendError('Nombre de archivo inválido', 400);
+            }
+
+            $filePath = __DIR__ . '/../../uploads/' . $filename;
+
+            if (!file_exists($filePath)) {
+                AuthMiddleware::sendError('Archivo no encontrado en el servidor', 404);
+            }
+
+            // Additional security: verify file is within uploads directory
+            $realPath = realpath($filePath);
+            $uploadsDir = realpath(__DIR__ . '/../../uploads/');
+            if ($realPath === false || strpos($realPath, $uploadsDir) !== 0) {
+                AuthMiddleware::sendError('Acceso denegado', 403);
+            }
+
+            header('Content-Type: application/pdf');
+            header('Content-Disposition: ' . $disposition . '; filename="' . preg_replace('/[^a-zA-Z0-9._-]/', '_', $filename) . '"');
+            readfile($filePath);
+            exit;
+
+        } catch (\Exception $e) {
+            error_log('Error getting approval letter: ' . $e->getMessage());
+            AuthMiddleware::sendError('Error interno del servidor', 500);
+        }
+    }
+
+    /**
+     * GET /tickets/download/:filename
+     * Download file
+     */
+    public function downloadFile($filename)
+    {
+        AuthMiddleware::authenticate();
+
+        try {
+            // Validate and sanitize filename to prevent path traversal
+            $safeFilename = basename($filename);
+            if (empty($safeFilename) || $safeFilename !== $filename) {
+                AuthMiddleware::sendError('Nombre de archivo inválido', 400);
+            }
+
+            $filePath = __DIR__ . '/../../uploads/' . $safeFilename;
+
+            if (!file_exists($filePath)) {
+                AuthMiddleware::sendError('Archivo no encontrado', 404);
+            }
+
+            // Additional security: verify file is within uploads directory
+            $realPath = realpath($filePath);
+            $uploadsDir = realpath(__DIR__ . '/../../uploads/');
+            if ($realPath === false || strpos($realPath, $uploadsDir) !== 0) {
+                AuthMiddleware::sendError('Acceso denegado', 403);
+            }
+
+            header('Content-Type: application/octet-stream');
+            header('Content-Disposition: attachment; filename="' . preg_replace('/[^a-zA-Z0-9._-]/', '_', $safeFilename) . '"');
+            readfile($filePath);
+            exit;
+
+        } catch (\Exception $e) {
+            error_log('Error downloading file: ' . $e->getMessage());
+            AuthMiddleware::sendError('Error interno del servidor', 500);
+        }
+    }
+
+    /**
+     * POST /tickets/:id/escalate
+     * Escalate ticket
+     */
+    public function escalateTicket($id)
+    {
+        // Validar ID del ticket
+        $id = (int)$id;
+        if ($id <= 0) {
+            error_log("❌ [ESCALAMIENTO] ID de ticket inválido: $id");
+            AuthMiddleware::sendError('ID de ticket inválido', 400);
+            return;
+        }
+
+        error_log("🚀 [ESCALAMIENTO] Iniciando escalamiento de ticket #$id");
+
+        $user = AuthMiddleware::authenticate();
+        $body = AuthMiddleware::getRequestBody();
+
+        // Validar que el usuario tenga permisos para escalar (técnico o administrador)
+        $rolUsuario = strtolower(trim($user['rol'] ?? ''));
+        if ($rolUsuario !== 'tecnico' && $rolUsuario !== 'administrador') {
+            AuthMiddleware::sendError('Solo los técnicos y administradores pueden escalar tickets', 403);
+            return;
+        }
+
+        $tecnicoDestino = $body['tecnicoDestino'] ?? null;
+        $motivoEscalamiento = $body['motivoEscalamiento'] ?? '';
+
+        error_log("📋 [ESCALAMIENTO] Datos recibidos - técnicoDestino: $tecnicoDestino, motivo: " . substr($motivoEscalamiento, 0, 50));
+
+        if (!$motivoEscalamiento) {
+            AuthMiddleware::sendError('El motivo de escalamiento es requerido', 400);
+            return;
+        }
+
+        if (!$tecnicoDestino) {
+            AuthMiddleware::sendError('Debes seleccionar un técnico destino para escalar el ticket', 400);
+            return;
+        }
+
+        // Variable para rastrear si el escalamiento se completó exitosamente
+        $escalamientoCompletado = false;
+
+        try {
+            // Check destination technician exists
+            $stmt = $this->db->query(
+                'SELECT id_usuario, nombre, correo, rol FROM usuarios WHERE id_usuario = ? AND rol IN ("tecnico", "administrador")',
+                [$tecnicoDestino]
+            );
+
+            $tecnicoDestinoInfo = $stmt->fetch();
+
+            if (!$tecnicoDestinoInfo) {
+                AuthMiddleware::sendError('El técnico seleccionado no existe o no es válido', 400);
+                return;
+            }
+
+            // Cannot escalate to self - comparar como enteros para evitar problemas de tipo
+            $tecnicoDestinoId = (int)$tecnicoDestino;
+            $usuarioActualId = (int)($user['id_usuario'] ?? $user['id'] ?? 0);
+
+            error_log("🔍 [ESCALAMIENTO] Validación: técnicoDestino=$tecnicoDestinoId, usuarioActual=$usuarioActualId");
+
+            if ($tecnicoDestinoId === $usuarioActualId && $tecnicoDestinoId > 0) {
+                error_log("❌ [ESCALAMIENTO] Intento de escalar a sí mismo bloqueado");
+                AuthMiddleware::sendError('No puedes escalar un ticket a ti mismo', 400);
+                return;
+            }
+
+            // Check ticket exists
+            // Si es administrador, puede escalar cualquier ticket
+            // Si es técnico, puede escalar tickets asignados a él (incluyendo tickets escalados a él)
+            // IMPORTANTE: Cuando un ticket se escala, el id_tecnico cambia al técnico destino,
+            // por lo que el técnico destino puede escalarlo nuevamente
+            $esAdministrador = ($rolUsuario === 'administrador');
+            $idUsuarioActual = (int)$user['id_usuario'];
+
+            if ($esAdministrador) {
+                // Administrador puede escalar cualquier ticket
+                $stmt = $this->db->query(
+                    'SELECT id_ticket, id_tecnico, id_usuario, estatus FROM tickets WHERE id_ticket = ?',
+                    [$id]
+                );
+            } else {
+                // Técnico puede escalar tickets asignados a él O tickets reabiertos donde él es el técnico de la reapertura
+                $stmt = $this->db->query(
+                    'SELECT t.id_ticket, t.id_tecnico, t.id_usuario, t.estatus
+                     FROM tickets t
+                     LEFT JOIN (
+                         SELECT tr1.id_ticket, tr1.tecnico_id
+                         FROM ticketreaperturas tr1
+                         INNER JOIN (
+                             SELECT id_ticket, MAX(fecha_reapertura) AS max_fecha
+                             FROM ticketreaperturas
+                             GROUP BY id_ticket
+                         ) latest ON latest.id_ticket = tr1.id_ticket AND latest.max_fecha = tr1.fecha_reapertura
+                     ) tr ON tr.id_ticket = t.id_ticket
+                     WHERE t.id_ticket = ? AND (t.id_tecnico = ? OR tr.tecnico_id = ?)',
+                    [$id, $idUsuarioActual, $idUsuarioActual]
+                );
+            }
+
+            $ticket = $stmt->fetch();
+
+            if (!$ticket) {
+                if ($esAdministrador) {
+                    AuthMiddleware::sendError('Ticket no encontrado', 404);
+                } else {
+                    // Verificar si el ticket existe pero no pertenece al usuario
+                    $stmtCheck = $this->db->query(
+                        'SELECT id_ticket FROM tickets WHERE id_ticket = ?',
+                        [$id]
+                    );
+                    $ticketExiste = $stmtCheck->fetch();
+
+                    if ($ticketExiste) {
+                        AuthMiddleware::sendError('No tienes permisos para escalar este ticket. Solo puedes escalar tickets asignados a ti.', 403);
+                    } else {
+                        AuthMiddleware::sendError('Ticket no encontrado', 404);
+                    }
+                }
+                return;
+            }
+
+            // Log para debugging
+            error_log("📧 [ESCALAMIENTO] Ticket #$id - Usuario: {$user['nombre']} (ID: $idUsuarioActual, Rol: $rolUsuario)");
+            error_log("📧 [ESCALAMIENTO] Ticket asignado a técnico ID: " . ($ticket['id_tecnico'] ?? 'NULL'));
+            error_log("📧 [ESCALAMIENTO] Ticket creado por usuario ID: " . ($ticket['id_usuario'] ?? 'NULL'));
+
+            // Cannot escalate closed ticket
+            if ($ticket['estatus'] === 'Cerrado') {
+                AuthMiddleware::sendError('No se puede escalar un ticket que ya está cerrado', 403);
+                return;
+            }
+
+            // Verificar que no se esté escalando al mismo técnico que ya tiene el ticket
+            $ticketTecnicoActual = (int)($ticket['id_tecnico'] ?? 0);
+            if ($ticketTecnicoActual > 0 && $ticketTecnicoActual === (int)$tecnicoDestino) {
+                AuthMiddleware::sendError('El ticket ya está asignado a este técnico. No es necesario escalarlo.', 400);
+                return;
+            }
+
+            // Update ticket status and assign to new technician
+            // IMPORTANTE: Esta es la operación crítica - si esto funciona, el escalamiento se considera exitoso
+            error_log("📧 [ESCALAMIENTO] Actualizando ticket #$id a estado Escalado y asignando a técnico ID: $tecnicoDestino");
+            $stmtUpdate = $this->db->query(
+                'UPDATE tickets SET estatus = "Escalado", id_tecnico = ?, fecha_asignacion = COALESCE(fecha_asignacion, NOW()) WHERE id_ticket = ?',
+                [$tecnicoDestino, $id]
+            );
+
+            // Verificar que la actualización se realizó correctamente
+            $stmtVerify = $this->db->query(
+                'SELECT id_ticket, estatus, id_tecnico FROM tickets WHERE id_ticket = ?',
+                [$id]
+            );
+            $ticketActualizado = $stmtVerify->fetch();
+
+            if (!$ticketActualizado || $ticketActualizado['estatus'] !== 'Escalado' || (int)$ticketActualizado['id_tecnico'] !== (int)$tecnicoDestino) {
+                error_log("❌ [ESCALAMIENTO] No se pudo actualizar el ticket #$id correctamente");
+                error_log("   Estado esperado: Escalado, Estado actual: " . ($ticketActualizado['estatus'] ?? 'NULL'));
+                error_log("   Técnico esperado: $tecnicoDestino, Técnico actual: " . ($ticketActualizado['id_tecnico'] ?? 'NULL'));
+                AuthMiddleware::sendError('No se pudo actualizar el ticket. Por favor, intenta nuevamente.', 500);
+                return;
+            }
+
+            error_log("✅ [ESCALAMIENTO] Ticket #$id actualizado exitosamente - Estado: {$ticketActualizado['estatus']}, Técnico: {$ticketActualizado['id_tecnico']}");
+
+            // Marcar que el escalamiento se completó exitosamente
+            $escalamientoCompletado = true;
+
+            // ============================================
+            // GUARDAR INFORMACIÓN DE ESCALAMIENTO ANTES de enviar respuesta
+            // Esto es CRÍTICO para que los datos aparezcan correctamente
+            // ============================================
+            $tecnicoOriginalId = $ticket['id_tecnico'] ?? $user['id_usuario'];
+
+            error_log("📧 [ESCALAMIENTO] Guardando información de escalamiento en BD");
+            error_log("📧 [ESCALAMIENTO] Técnico original: $tecnicoOriginalId, Técnico nuevo: $tecnicoDestino, Usuario que escala: {$user['id_usuario']}");
+
+            $escalamientoGuardado = false;
+            try {
+                $this->db->query(
+                    'INSERT INTO escalamientos (id_ticket, tecnico_original_id, tecnico_nuevo_id, nivel_escalamiento, persona_enviar, motivo_escalamiento, fecha_escalamiento) VALUES (?, ?, ?, ?, ?, ?, NOW())',
+                    [$id, $tecnicoOriginalId, $tecnicoDestino, 'Manual', $tecnicoDestino, $motivoEscalamiento]
+                );
+                $escalamientoGuardado = true;
+                error_log("✅ [ESCALAMIENTO] Información de escalamiento guardada exitosamente");
+            } catch (\Exception $e) {
+                error_log("❌ [ESCALAMIENTO] Error guardando información de escalamiento: " . $e->getMessage());
+                error_log("❌ [ESCALAMIENTO] Stack trace: " . $e->getTraceAsString());
+                // Intentar verificar si ya existe un registro
+                try {
+                    $stmtCheck = $this->db->query(
+                        'SELECT id FROM escalamientos WHERE id_ticket = ? AND tecnico_nuevo_id = ? ORDER BY fecha_escalamiento DESC LIMIT 1',
+                        [$id, $tecnicoDestino]
+                    );
+                    $existe = $stmtCheck->fetch();
+                    if ($existe) {
+                        error_log("⚠️ [ESCALAMIENTO] Ya existe un registro de escalamiento para este ticket");
+                        $escalamientoGuardado = true;
+                    }
+                } catch (\Exception $e2) {
+                    error_log("❌ [ESCALAMIENTO] Error verificando escalamiento existente: " . $e2->getMessage());
+                }
+            }
+
+            // ============================================
+            // OBTENER INFORMACIÓN DEL TICKET ANTES de enviar respuesta
+            // ============================================
+            $ticketInfo = null;
+            try {
+                $stmtTicket = $this->db->query(
+                    'SELECT t.id_ticket, s.categoria, s.subcategoria, u.id_usuario as empleado_id, u.nombre as empleado_nombre, u.correo as empleado_correo
+                     FROM tickets t
+                     JOIN servicios s ON t.id_servicio = s.id_servicio
+                     JOIN usuarios u ON t.id_usuario = u.id_usuario
+                     WHERE t.id_ticket = ?',
+                    [$id]
+                );
+                $ticketInfo = $stmtTicket->fetch();
+
+                if (!$ticketInfo) {
+                    error_log("⚠️ [ESCALAMIENTO] No se pudo obtener información completa del ticket #$id");
+                }
+            } catch (\Exception $e) {
+                error_log("❌ [ESCALAMIENTO] Error obteniendo información del ticket #$id: " . $e->getMessage());
+                $ticketInfo = null;
+            }
+
+            // ============================================
+            // CREAR NOTIFICACIONES DE ESCALAMIENTO ANTES de enviar respuesta
+            // ============================================
+            try {
+                error_log("📧 [NOTIFICACIONES] Creando notificaciones de escalamiento para ticket #$id");
+                error_log("📧 [NOTIFICACIONES] Técnico destino ID: $tecnicoDestino");
+                error_log("📧 [NOTIFICACIONES] TicketInfo: " . ($ticketInfo ? 'EXISTE' : 'NO EXISTE'));
+
+                // Notificar al nuevo técnico (SIEMPRE) - Insertar directamente para evitar problemas de validación
+                $mensajeTecnico = "Se te ha escalado el ticket #$id. Motivo: $motivoEscalamiento";
+                try {
+                    // Insertar directamente en la tabla de notificaciones
+                    $nombresTabla = ['notificaciones', 'Notificaciones', 'NOTIFICACIONES'];
+                    $insertado = false;
+                    foreach ($nombresTabla as $nombreTabla) {
+                        try {
+                            $this->db->query(
+                                "INSERT INTO `$nombreTabla` (id_usuario, mensaje, tipo, id_ticket, fecha_envio, leida) VALUES (?, ?, ?, ?, NOW(), 0)",
+                                [$tecnicoDestino, $mensajeTecnico, 'Interna', $id]
+                            );
+                            $insertado = true;
+                            break;
+                        } catch (\Exception $e) {
+                            if (strpos($e->getMessage(), "doesn't exist") === false && strpos($e->getMessage(), "Unknown table") === false) {
+                                throw $e;
+                            }
+                            continue;
+                        }
+                    }
+                    if (!$insertado) {
+                        // Si falla la inserción directa, intentar con la función normal
+                        $this->crearNotificacionInterna($tecnicoDestino, $id, $mensajeTecnico);
+                    }
+                } catch (\Exception $e) {
+                    // Si falla todo, intentar con la función normal como último recurso
+                    $this->crearNotificacionInterna($tecnicoDestino, $id, $mensajeTecnico);
+                }
+
+                // Notificar al empleado (usuario del ticket) - solo si tenemos ticketInfo
+                if ($ticketInfo && isset($ticketInfo['empleado_id']) && $ticketInfo['empleado_id'] > 0) {
+                    $nombreTecnico = $tecnicoDestinoInfo['nombre'] ?? 'un técnico';
+                    error_log("📧 [NOTIFICACIONES] Creando notificación para empleado ID: {$ticketInfo['empleado_id']}");
+                    $resultEmp = $this->crearNotificacionInterna(
+                        $ticketInfo['empleado_id'],
+                        $id,
+                        "Tu ticket #$id ha sido escalado al técnico $nombreTecnico"
+                    );
+                    error_log($resultEmp ? "✅ [NOTIFICACIONES] Notificación escalamiento empleado OK" : "❌ [NOTIFICACIONES] Notificación escalamiento empleado FALLÓ");
+                } else {
+                    error_log("⚠️ [NOTIFICACIONES] No se puede crear notificación para empleado: ticketInfo inválido o empleado_id faltante");
+                }
+            } catch (\Exception $e) {
+                error_log("❌ [NOTIFICACIONES] Error creando notificaciones de escalamiento: " . $e->getMessage());
+                error_log("❌ [NOTIFICACIONES] Stack trace: " . $e->getTraceAsString());
+            }
+
+            // ============================================
+            // ENVIAR RESPUESTA EXITOSA DESPUÉS de crear notificaciones
+            // ============================================
+            $nombreTecnicoDestino = isset($tecnicoDestinoInfo['nombre']) ? $tecnicoDestinoInfo['nombre'] : 'Técnico destino';
+
+            $response = [
+                'message' => 'Ticket escalado exitosamente a ' . $nombreTecnicoDestino,
+                'ticketId' => (int)$id,
+                'escalamiento' => [
+                    'tecnicoDestino' => $nombreTecnicoDestino,
+                    'motivo' => $motivoEscalamiento
+                ],
+                'success' => true
+            ];
+
+            error_log("✅ [ESCALAMIENTO] Enviando respuesta exitosa para ticket #$id");
+            AuthMiddleware::sendResponse($response);
+
+            // ============================================
+            // DESPUÉS de enviar la respuesta, hacer las operaciones secundarias (correos)
+            // ============================================
+            try {
+
+                // Enviar correos de notificación (no crítico)
+                if ($ticketInfo && isset($ticketInfo['empleado_nombre']) && isset($ticketInfo['empleado_correo'])) {
+                    try {
+                        $ticketData = [
+                            'id' => $ticketInfo['id_ticket'],
+                            'categoria' => $ticketInfo['categoria'] ?? 'N/A',
+                            'subcategoria' => $ticketInfo['subcategoria'] ?? 'N/A'
+                        ];
+
+                        $oldTechnician = [
+                            'nombre' => $user['nombre'] ?? 'Técnico anterior',
+                            'email' => $user['correo'] ?? ''
+                        ];
+
+                        $newTechnician = [
+                            'nombre' => $tecnicoDestinoInfo['nombre'] ?? 'Técnico',
+                            'email' => $tecnicoDestinoInfo['correo'] ?? ''
+                        ];
+
+                        $employee = [
+                            'nombre' => $ticketInfo['empleado_nombre'],
+                            'email' => $ticketInfo['empleado_correo']
+                        ];
+
+                        $emailService = new EmailService();
+                        $emailService->sendTicketEscalatedNotification($ticketData, $newTechnician, $oldTechnician, $employee, $motivoEscalamiento);
+                        error_log("📧 [CORREOS] Correos de escalamiento enviados para ticket #$id");
+                    } catch (\Exception $e) {
+                        error_log("⚠️ [CORREOS] Error enviando correos: " . $e->getMessage());
+                    }
+                }
+            } catch (\Exception $e) {
+                error_log("⚠️ [ESCALAMIENTO] Error en proceso secundario (no crítico): " . $e->getMessage());
+                // No importa - la respuesta ya se envió exitosamente arriba
+            }
+
+            // La respuesta ya se envió arriba, no hacer nada más
+            return;
+
+        } catch (\Exception $e) {
+            error_log("❌ [ESCALAMIENTO] Error en escalamiento de ticket #$id: " . $e->getMessage());
+            error_log("❌ [ESCALAMIENTO] Stack trace: " . $e->getTraceAsString());
+            error_log("❌ [ESCALAMIENTO] File: " . $e->getFile() . " Line: " . $e->getLine());
+
+            // Si el escalamiento se completó (el UPDATE fue exitoso), enviar respuesta exitosa
+            if ($escalamientoCompletado) {
+                error_log("⚠️ [ESCALAMIENTO] El ticket se escaló exitosamente pero hubo un error después. Enviando respuesta exitosa.");
+                $nombreTecnicoDestino = 'el técnico asignado';
+                try {
+                    if (isset($tecnicoDestinoInfo) && isset($tecnicoDestinoInfo['nombre'])) {
+                        $nombreTecnicoDestino = $tecnicoDestinoInfo['nombre'];
+                    } else {
+                        // Intentar obtener el nombre del técnico desde la BD
+                        $stmtTec = $this->db->query(
+                            'SELECT nombre FROM usuarios WHERE id_usuario = ?',
+                            [$tecnicoDestino]
+                        );
+                        $tecData = $stmtTec->fetch();
+                        if ($tecData && !empty($tecData['nombre'])) {
+                            $nombreTecnicoDestino = $tecData['nombre'];
+                        }
+                    }
+                } catch (\Exception $e2) {
+                    // Ignorar error al obtener nombre
+                }
+
+                AuthMiddleware::sendResponse([
+                    'message' => 'Ticket escalado exitosamente a ' . $nombreTecnicoDestino,
+                    'ticketId' => (int)$id,
+                    'success' => true
+                ]);
+                return;
+            }
+
+            // Si el escalamiento no se completó, verificar si se completó de todos modos (fallback)
+            try {
+                $stmtCheck = $this->db->query(
+                    'SELECT estatus, id_tecnico FROM tickets WHERE id_ticket = ?',
+                    [$id]
+                );
+                $ticketCheck = $stmtCheck->fetch();
+
+                // Si el ticket está escalado, enviar respuesta exitosa aunque haya habido un error
+                if ($ticketCheck && $ticketCheck['estatus'] === 'Escalado') {
+                    error_log("⚠️ [ESCALAMIENTO] El ticket se escaló (verificado en BD). Enviando respuesta exitosa.");
+                    $nombreTecnico = 'el técnico asignado';
+                    try {
+                        $stmtTec = $this->db->query(
+                            'SELECT nombre FROM usuarios WHERE id_usuario = ?',
+                            [$ticketCheck['id_tecnico']]
+                        );
+                        $tecData = $stmtTec->fetch();
+                        if ($tecData && !empty($tecData['nombre'])) {
+                            $nombreTecnico = $tecData['nombre'];
+                        }
+                    } catch (\Exception $e2) {
+                        // Ignorar error al obtener nombre
+                    }
+
+                    AuthMiddleware::sendResponse([
+                        'message' => 'Ticket escalado exitosamente a ' . $nombreTecnico,
+                        'ticketId' => (int)$id,
+                        'success' => true
+                    ]);
+                    return;
+                }
+            } catch (\Exception $e2) {
+                // Si falla la verificación, continuar con el error original
+            }
+
+            AuthMiddleware::sendError('Error interno del servidor al escalar el ticket: ' . $e->getMessage(), 500);
+        }
+    }
+
+    /**
+     * PUT /tickets/:id/reopen/technician-comment
+     * Add technician comment to reopened ticket
+     */
+    public function addTechnicianReopenComment($id)
+    {
+        $user = AuthMiddleware::authenticate();
+
+        if ($user['rol'] !== 'tecnico' && $user['rol'] !== 'administrador') {
+            AuthMiddleware::sendError('Solo los técnicos pueden registrar la causa de reapertura', 403);
+        }
+
+        $body = AuthMiddleware::getRequestBody();
+        $causa = $body['causa'] ?? '';
+
+        if (!$causa || !trim($causa)) {
+            AuthMiddleware::sendError('La causa es obligatoria', 400);
+        }
+
+        try {
+            error_log("📝 [REApertura] Intentando registrar causa técnica para ticket #$id por usuario {$user['id_usuario']}");
+
+            // Intentar con diferentes nombres de tabla (case-sensitive)
+            $reopening = null;
+            $nombresTabla = ['ticketreaperturas', 'TicketReaperturas', 'TICKETREAPERTURAS'];
+            $tablaEncontrada = false;
+
+            foreach ($nombresTabla as $nombreTabla) {
+                try {
+                    error_log("🔍 [REApertura] Intentando con tabla: $nombreTabla");
+                    // Intentar con diferentes nombres de tabla de tickets también
+                    $nombresTablaTickets = ['tickets', 'Tickets', 'TICKETS'];
+                    $stmt = null;
+                    $tablaTicketsEncontrada = false;
+
+                    foreach ($nombresTablaTickets as $nombreTablaTickets) {
+                        try {
+                            $stmt = $this->db->query(
+                                "SELECT tr.id_reapertura, tr.tecnico_id, t.id_tecnico as ticket_tecnico_id
+                                 FROM `$nombreTabla` tr
+                                 JOIN `$nombreTablaTickets` t ON tr.id_ticket = t.id_ticket
+                                 WHERE tr.id_ticket = ?
+                                 ORDER BY tr.fecha_reapertura DESC, tr.id_reapertura DESC
+                                 LIMIT 1",
+                                [$id]
+                            );
+                            $tablaTicketsEncontrada = true;
+                            error_log("✅ [REApertura] Tabla de tickets encontrada: $nombreTablaTickets");
+                            break; // Si funciona, salir del loop
+                        } catch (\Exception $e) {
+                            error_log("⚠️ [REApertura] Tabla de tickets $nombreTablaTickets no encontrada: " . $e->getMessage());
+                            continue;
+                        }
+                    }
+
+                    if (!$stmt || !$tablaTicketsEncontrada) {
+                        error_log("⚠️ [REApertura] No se pudo encontrar ninguna tabla de tickets válida para $nombreTabla");
+                        continue; // Intentar siguiente tabla de reaperturas
+                    }
+
+                    $reopening = $stmt->fetch();
+                    if ($reopening) {
+                        $tablaEncontrada = true;
+                        error_log("✅ [REApertura] Tabla encontrada: $nombreTabla con tickets: $nombreTablaTickets");
+                        break;
+                    }
+                } catch (\Exception $e) {
+                    error_log("⚠️ [REApertura] Error con tabla $nombreTabla: " . $e->getMessage());
+                    continue;
+                }
+            }
+
+            if (!$reopening || !$tablaEncontrada) {
+                error_log("❌ [REApertura] No se encontró información de reapertura para ticket #$id");
+                AuthMiddleware::sendError('No se encontró información de reapertura para este ticket', 404);
+                return;
+            }
+
+            error_log("📋 [REApertura] Datos encontrados: id_reapertura={$reopening['id_reapertura']}, tecnico_id={$reopening['tecnico_id']}, ticket_tecnico_id={$reopening['ticket_tecnico_id']}");
+
+            // Check permissions
+            $ticketTecnicoId = isset($reopening['ticket_tecnico_id']) ? (int)$reopening['ticket_tecnico_id'] : 0;
+            $reopeningTecnicoId = isset($reopening['tecnico_id']) ? (int)$reopening['tecnico_id'] : 0;
+            $userId = (int)$user['id_usuario'];
+            $esAdministrador = $user['rol'] === 'administrador';
+
+            $tienePermiso = $esAdministrador ||
+                           $ticketTecnicoId === $userId ||
+                           $reopeningTecnicoId === $userId;
+
+            if (!$tienePermiso) {
+                error_log("🚫 [REApertura] Sin permisos: usuario $userId, ticket_tecnico=$ticketTecnicoId, reapertura_tecnico=$reopeningTecnicoId, admin=$esAdministrador");
+                AuthMiddleware::sendError('No tienes permisos para actualizar la causa de este ticket', 403);
+                return;
+            }
+
+            // Update reopening with cause - intentar con diferentes nombres de tabla
+            $actualizado = false;
+            foreach ($nombresTabla as $nombreTabla) {
+                try {
+                    error_log("💾 [REApertura] Actualizando causa en tabla: $nombreTabla");
+                    $this->db->query(
+                        "UPDATE `$nombreTabla`
+                         SET causa_tecnico = ?, tecnico_id = ?, fecha_respuesta_tecnico = NOW()
+                         WHERE id_reapertura = ?",
+                        [trim($causa), $userId, $reopening['id_reapertura']]
+                    );
+                    $actualizado = true;
+                    error_log("✅ [REApertura] Causa actualizada exitosamente en tabla: $nombreTabla");
+                    break;
+                } catch (\Exception $e) {
+                    error_log("⚠️ [REApertura] Error actualizando en tabla $nombreTabla: " . $e->getMessage());
+                    continue;
+                }
+            }
+
+            if (!$actualizado) {
+                throw new \Exception("No se pudo actualizar la causa en ninguna tabla de reaperturas");
+            }
+
+            // Obtener datos actualizados de la reapertura para devolverlos
+            $reaperturaActualizada = null;
+            $tablaUsadaParaUpdate = null;
+
+            // Encontrar qué tabla se usó para el UPDATE
+            foreach ($nombresTabla as $nombreTabla) {
+                try {
+                    $stmtActualizado = $this->db->query(
+                        "SELECT id_reapertura, id_ticket, usuario_id, tecnico_id, observaciones_usuario,
+                                causa_tecnico, fecha_reapertura, fecha_respuesta_tecnico, estado_reapertura
+                         FROM `$nombreTabla`
+                         WHERE id_reapertura = ?",
+                        [$reopening['id_reapertura']]
+                    );
+                    $temp = $stmtActualizado->fetch();
+                    if ($temp && !empty($temp['causa_tecnico'])) {
+                        $reaperturaActualizada = $temp;
+                        $tablaUsadaParaUpdate = $nombreTabla;
+                        error_log("✅ [REApertura] Datos actualizados obtenidos de tabla: $nombreTabla");
+                        break;
+                    }
+                } catch (\Exception $e) {
+                    error_log("⚠️ [REApertura] Error obteniendo datos actualizados de $nombreTabla: " . $e->getMessage());
+                    continue;
+                }
+            }
+
+            if (!$reaperturaActualizada) {
+                error_log("⚠️ [REApertura] No se pudieron obtener datos actualizados, usando datos del reopening original");
+                // Usar datos básicos si no se pueden obtener actualizados
+                $reaperturaActualizada = [
+                    'id_reapertura' => $reopening['id_reapertura'],
+                    'causa_tecnico' => trim($causa),
+                    'fecha_respuesta_tecnico' => date('Y-m-d H:i:s')
+                ];
+            }
+
+            error_log("✅ [REApertura] Causa registrada correctamente para ticket #$id");
+
+            AuthMiddleware::sendResponse([
+                'message' => 'Causa de reapertura registrada correctamente',
+                'reapertura' => [
+                    'id' => (int)$reaperturaActualizada['id_reapertura'],
+                    'observacionesUsuario' => $reaperturaActualizada['observaciones_usuario'] ?? null,
+                    'causaTecnico' => $reaperturaActualizada['causa_tecnico'] ?? trim($causa),
+                    'fechaReapertura' => $reaperturaActualizada['fecha_reapertura'] ?? null,
+                    'fechaRespuestaTecnico' => $reaperturaActualizada['fecha_respuesta_tecnico'] ?? date('Y-m-d H:i:s')
+                ]
+            ]);
+
+        } catch (\Exception $e) {
+            $errorMsg = 'Error adding technician reopen comment: ' . $e->getMessage();
+            error_log("❌ [REApertura] $errorMsg");
+            error_log("❌ [REApertura] Stack trace: " . $e->getTraceAsString());
+            error_log("❌ [REApertura] Ticket ID: $id, Usuario: {$user['id_usuario']}, Causa: " . substr(trim($causa), 0, 50));
+            AuthMiddleware::sendError('Error interno del servidor: ' . $e->getMessage(), 500);
+        }
+    }
+
+    /**
+     * Helper function para crear notificaciones internas
+     * Solo crea la notificación para el usuario especificado
+     * OPTIMIZADO: Eliminada validación de usuario para mejorar rendimiento (se confía en IDs del sistema)
+     *
+     * @param int $idUsuario ID del usuario que recibirá la notificación
+     * @param int|null $idTicket ID del ticket relacionado (opcional)
+     * @param string $mensaje Mensaje de la notificación
+     * @return bool true si se creó exitosamente, false en caso contrario
+     */
+    private function crearNotificacionInterna($idUsuario, $idTicket, $mensaje)
+    {
+        try {
+            // Validación básica solo (sin consulta extra a la BD para mejor rendimiento)
+            if (!$idUsuario || $idUsuario <= 0 || !is_numeric($idUsuario)) {
+                error_log("⚠️ [NOTIFICACIONES] No se puede crear notificación: idUsuario inválido ($idUsuario)");
+                return false;
+            }
+
+            // Crear la notificación directamente (optimizado - sin validar existencia de usuario)
+            // NOTA: id_ticket es NOT NULL en la BD, así que siempre debe tener un valor
+            // Si viene null, no crear la notificación (evitar errores de BD)
+            if ($idTicket === null || $idTicket <= 0) {
+                error_log("⚠️ [NOTIFICACIONES] No se puede crear notificación: idTicket inválido ($idTicket) para usuario $idUsuario");
+                return false;
+            }
+
+            // VALIDACIÓN CRÍTICA 1: Si el mensaje empieza con "Se te ha asignado" o "Se te asignó", solo enviar a técnicos/administradores
+            // NO enviar a empleados
+            // EXCEPCIÓN: "Se te ha escalado" se envía a técnicos/administradores (no se bloquea)
+            if ((stripos($mensaje, 'Se te ha asignado') === 0 || stripos($mensaje, 'Se te asignó') === 0 || stripos($mensaje, 'Se te asignó manualmente') === 0)
+                && stripos($mensaje, 'Se te ha escalado') !== 0) {
+                try {
+                    $stmtRol = $this->db->query(
+                        'SELECT rol FROM usuarios WHERE id_usuario = ?',
+                        [$idUsuario]
+                    );
+                    $usuarioData = $stmtRol->fetch();
+
+                    if ($usuarioData && isset($usuarioData['rol'])) {
+                        $rol = strtolower(trim($usuarioData['rol']));
+                        if ($rol !== 'tecnico' && $rol !== 'administrador') {
+                            error_log("🚫 [NOTIFICACIONES] BLOQUEADA: Notificación 'Se te ha asignado' para usuario ID $idUsuario con rol '$rol'. Solo se envían a técnicos/administradores.");
+                            return false;
+                        }
+                    }
+                } catch (\Exception $e) {
+                    error_log("⚠️ [NOTIFICACIONES] Error verificando rol del usuario $idUsuario para 'Se te ha asignado': " . $e->getMessage());
+                    // Si no se puede verificar el rol, no crear la notificación para evitar enviar a empleados
+                    return false;
+                }
+            }
+
+            // VALIDACIÓN ESPECIAL: Si el mensaje contiene "escalado" o "escalamiento", solo enviar a técnicos/administradores
+            // PERO: Si hay error al verificar, permitir la notificación (mejor enviar de más que de menos)
+            if (stripos($mensaje, 'escalado') !== false || stripos($mensaje, 'escalamiento') !== false) {
+                try {
+                    $stmtRol = $this->db->query(
+                        'SELECT rol FROM usuarios WHERE id_usuario = ?',
+                        [$idUsuario]
+                    );
+                    $usuarioData = $stmtRol->fetch();
+
+                    if ($usuarioData && isset($usuarioData['rol'])) {
+                        $rol = strtolower(trim($usuarioData['rol']));
+                        // Solo bloquear si NO es técnico ni administrador
+                        if ($rol !== 'tecnico' && $rol !== 'administrador') {
+                            return false;
+                        }
+                    }
+                    // Si no se puede verificar el rol, permitir la notificación (mejor enviar de más que de menos)
+                } catch (\Exception $e) {
+                    // Si hay error, permitir la notificación (mejor enviar de más que de menos)
+                    // NO retornar false aquí - continuar con la creación de la notificación
+                }
+            }
+
+            // VALIDACIÓN CRÍTICA 2: Si el mensaje empieza con "Tu ticket", solo enviar a usuarios (empleados)
+            // NO enviar a técnicos o administradores
+            if (stripos($mensaje, 'Tu ticket') === 0) {
+                try {
+                    $stmtRol = $this->db->query(
+                        'SELECT rol FROM usuarios WHERE id_usuario = ?',
+                        [$idUsuario]
+                    );
+                    $usuarioData = $stmtRol->fetch();
+
+                    if ($usuarioData && isset($usuarioData['rol'])) {
+                        $rol = strtolower(trim($usuarioData['rol']));
+                        if ($rol !== 'empleado') {
+                            error_log("🚫 [NOTIFICACIONES] BLOQUEADA: Notificación 'Tu ticket' para usuario ID $idUsuario con rol '$rol'. Solo se envían a empleados.");
+                            return false;
+                        }
+                    }
+                } catch (\Exception $e) {
+                    error_log("⚠️ [NOTIFICACIONES] Error verificando rol del usuario $idUsuario: " . $e->getMessage());
+                    // Si no se puede verificar el rol, no crear la notificación para evitar enviar a técnicos
+                    return false;
+                }
+            }
+
+            error_log("📝 [NOTIFICACIONES] Intentando crear notificación - Usuario: $idUsuario, Ticket: $idTicket, Mensaje: " . substr($mensaje, 0, 80));
+
+            // Intentar insertar en diferentes nombres de tabla
+            $insertado = false;
+            $nombresTabla = ['notificaciones', 'Notificaciones', 'NOTIFICACIONES'];
+            $ultimoError = null;
+
+            foreach ($nombresTabla as $nombreTabla) {
+                try {
+                    error_log("📝 [NOTIFICACIONES] Intentando insertar en tabla: $nombreTabla");
+                    $this->db->query(
+                        "INSERT INTO `$nombreTabla` (id_usuario, mensaje, tipo, id_ticket, fecha_envio, leida) VALUES (?, ?, ?, ?, NOW(), 0)",
+                        [$idUsuario, $mensaje, 'Interna', $idTicket]
+                    );
+                    $insertado = true;
+                    error_log("✅ [NOTIFICACIONES] Insertado exitosamente en tabla: $nombreTabla");
+                    break;
+                } catch (\Exception $e) {
+                    $ultimoError = $e->getMessage();
+                    error_log("⚠️ [NOTIFICACIONES] Error insertando en tabla $nombreTabla: " . $e->getMessage());
+                    if (strpos($e->getMessage(), "doesn't exist") === false && strpos($e->getMessage(), "Unknown table") === false) {
+                        // Si es otro tipo de error, lanzarlo
+                        throw $e;
+                    }
+                    // Si es error de tabla no existe, intentar siguiente
+                    continue;
+                }
+            }
+
+            if (!$insertado) {
+                $errorMsg = $ultimoError ? "Último error: $ultimoError" : "Ninguna tabla encontrada";
+                error_log("❌ [NOTIFICACIONES] No se pudo insertar notificación: $errorMsg");
+                throw new \Exception("No se pudo insertar notificación: $errorMsg");
+            }
+
+            // Log siempre activo para debugging de notificaciones
+            error_log("✅ [NOTIFICACIONES] Creada exitosamente para usuario ID $idUsuario, ticket #$idTicket: " . substr($mensaje, 0, 60) . "...");
+            return true;
+        } catch (\PDOException $e) {
+            $errorMsg = $e->getMessage();
+            $errorCode = $e->getCode();
+            error_log("❌ [NOTIFICACIONES] Error PDO creando notificación para usuario $idUsuario, ticket #$idTicket");
+            error_log("❌ [NOTIFICACIONES] Mensaje: $errorMsg");
+            error_log("❌ [NOTIFICACIONES] Código: $errorCode");
+            error_log("❌ [NOTIFICACIONES] SQL State: " . ($e->errorInfo[0] ?? 'N/A'));
+
+            // Si es un error de FK, el usuario o ticket no existe
+            if (strpos($errorMsg, 'FOREIGN KEY') !== false || strpos($errorMsg, '1452') !== false) {
+                error_log("⚠️ [NOTIFICACIONES] Usuario $idUsuario o ticket #$idTicket no existe en la BD");
+            }
+            return false;
+        } catch (\Exception $e) {
+            error_log("❌ [NOTIFICACIONES] Error general creando notificación para usuario $idUsuario, ticket #$idTicket: " . $e->getMessage());
+            error_log("❌ [NOTIFICACIONES] Stack trace: " . $e->getTraceAsString());
+            return false;
+        }
+    }
+
+    /**
+     * Crea notificaciones para administradores cuando ocurre un evento importante
+     *
+     * @param string $tipoEvento Tipo de evento (escalamiento, asignacion, etc.)
+     * @param int|null $idTicket ID del ticket relacionado
+     * @param string $mensaje Mensaje de la notificación
+     */
+    private function notificarAdministradores($tipoEvento, $idTicket, $mensaje)
+    {
+        try {
+            // Obtener todos los administradores
+            $stmt = $this->db->query(
+                'SELECT id_usuario FROM usuarios WHERE rol = ? AND activo = 1',
+                ['administrador']
+            );
+            $administradores = $stmt->fetchAll();
+
+            foreach ($administradores as $admin) {
+                $this->crearNotificacionInterna($admin['id_usuario'], $idTicket, $mensaje);
+            }
+
+            error_log("✅ Notificaciones enviadas a " . count($administradores) . " administrador(es) para evento: $tipoEvento");
+        } catch (\Exception $e) {
+            error_log("❌ Error notificando administradores: " . $e->getMessage());
+        }
+    }
+}
