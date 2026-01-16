@@ -138,7 +138,7 @@ export class ServiceCatalogComponent implements OnInit, OnDestroy {
 
   loadTechnicians(): void {
     console.log('🔍 Cargando técnicos para catálogo de servicios...');
-    
+
     // Cargar técnicos directamente desde la API usando TicketService
     this.ticketService.getTechnicians()
       .pipe(takeUntil(this.destroy$))
@@ -187,7 +187,7 @@ export class ServiceCatalogComponent implements OnInit, OnDestroy {
         this.technicians.forEach(technician => {
           const nombreCompleto = `${technician.nombre} ${technician.apellido || ''}`.trim();
           const nombreValue = technician.nombre.trim();
-          
+
           // Solo agregar si no está duplicado (comparar en mayúsculas para evitar duplicados por case)
           const nombreUpper = nombreValue.toUpperCase();
           if (!addedValues.has(nombreUpper)) {
@@ -347,7 +347,7 @@ export class ServiceCatalogComponent implements OnInit, OnDestroy {
           },
           error: (error) => {
             console.error('Error completo al crear servicio:', error);
-            
+
             // Si el error es 500 pero el servicio podría haberse creado, verificar
             if (error.status === 500 || error.status === 0) {
               // Intentar recargar servicios para verificar si se creó
@@ -355,11 +355,11 @@ export class ServiceCatalogComponent implements OnInit, OnDestroy {
                 this.loadServices();
                 // Verificar si el servicio se creó buscándolo en la lista
                 const formValue = this.addServiceForm.value;
-                const serviceExists = this.services.find(s => 
-                  s.categoria === formValue.categoria && 
+                const serviceExists = this.services.find(s =>
+                  s.categoria === formValue.categoria &&
                   s.subcategoria === formValue.subcategoria
                 );
-                
+
                 if (serviceExists) {
                   // El servicio se creó exitosamente a pesar del error
                   this.successMessage = `Servicio ${serviceExists.categoria} - ${serviceExists.subcategoria} creado exitosamente`;
@@ -370,7 +370,7 @@ export class ServiceCatalogComponent implements OnInit, OnDestroy {
                 }
               }, 500);
             }
-            
+
             // Mostrar información detallada del error si está disponible
             let errorMsg = 'Error al crear el servicio';
             if (error.error) {
