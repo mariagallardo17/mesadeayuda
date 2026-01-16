@@ -13,8 +13,10 @@ class EmailService
         $cleanEnv = function($key, $default = '') {
             $value = $_ENV[$key] ?? $default;
             // Remove surrounding quotes if present
-            if (is_string($value) && (($value[0] === '"' && substr($value, -1) === '"') || ($value[0] === "'" && substr($value, -1) === "'"))) {
-                $value = substr($value, 1, -1);
+            if (is_string($value) && strlen($value) > 0) {
+                if (($value[0] === '"' && substr($value, -1) === '"') || ($value[0] === "'" && substr($value, -1) === "'")) {
+                    $value = substr($value, 1, -1);
+                }
             }
             return trim($value);
         };
@@ -53,7 +55,9 @@ class EmailService
         $cleanEnv = function($key, $default = '') {
             $value = $_ENV[$key] ?? $default;
             if (is_string($value) && strlen($value) > 0) {
-                if (($value[0] === '"' && substr($value, -1) === '"') || ($value[0] === "'" && substr($value, -1) === "'")) {
+                $firstChar = $value[0] ?? '';
+                $lastChar = substr($value, -1) ?? '';
+                if (($firstChar === '"' && $lastChar === '"') || ($firstChar === "'" && $lastChar === "'")) {
                     $value = substr($value, 1, -1);
                 }
             }
@@ -84,13 +88,23 @@ class EmailService
                     }
                 }
             } catch (\Exception $e) {
-                error_log("❌ [CORREOS] Error con SMTP: " . $e->getMessage());
+                $errorMessage = $e->getMessage();
+                error_log("❌ [CORREOS] Error con SMTP: " . $errorMessage);
+                error_log("❌ [CORREOS] Host SMTP: " . ($smtpHost ?: 'NO CONFIGURADO'));
+                error_log("❌ [CORREOS] Usuario SMTP: " . ($smtpUser ? substr($smtpUser, 0, 3) . '***' : 'NO CONFIGURADO'));
+                error_log("❌ [CORREOS] Contraseña SMTP: " . ($smtpPass ? 'CONFIGURADA (' . strlen($smtpPass) . ' caracteres)' : 'NO CONFIGURADA'));
+                
                 // Fallback a SendGrid si está configurado
                 if (!empty($sendGridApiKey)) {
                     error_log("🔄 [CORREOS] Intentando SendGrid como fallback...");
-                    return $this->sendEmailUsingSendGrid($to, $subject, $htmlBody);
+                    try {
+                        return $this->sendEmailUsingSendGrid($to, $subject, $htmlBody);
+                    } catch (\Exception $e2) {
+                        error_log("❌ [CORREOS] SendGrid también falló: " . $e2->getMessage());
+                        throw new \Exception("SMTP falló: $errorMessage. SendGrid también falló: " . $e2->getMessage());
+                    }
                 } else {
-                    throw $e;
+                    throw new \Exception("SMTP falló: $errorMessage. SendGrid no está configurado como respaldo. Configura SENDGRID_API_KEY en .env o corrige la configuración SMTP.");
                 }
             }
         }
@@ -191,13 +205,17 @@ class EmailService
             return true;
 
         } catch (PHPMailerException $e) {
-            error_log("❌ [CORREOS] PHPMailer Error: " . $mail->ErrorInfo);
-            error_log("❌ [CORREOS] Excepción: " . $e->getMessage());
-            return false;
+            $errorInfo = isset($mail) ? $mail->ErrorInfo : 'No disponible';
+            error_log("❌ [CORREOS] PHPMailer Error: " . $errorInfo);
+            error_log("❌ [CORREOS] Excepción PHPMailer: " . $e->getMessage());
+            error_log("❌ [CORREOS] Detalles SMTP - Host: $smtpHost, Port: $smtpPort, User: " . substr($smtpUser, 0, 3) . "***");
+            
+            // Lanzar excepción con más detalles para que el método principal pueda manejarla
+            throw new \Exception("Error SMTP: " . $e->getMessage() . " | PHPMailer Info: " . $errorInfo);
         } catch (\Exception $e) {
             error_log("❌ [CORREOS] Excepción en sendEmailUsingSMTP: " . $e->getMessage());
             error_log("❌ [CORREOS] Stack trace: " . $e->getTraceAsString());
-            return false;
+            throw $e; // Re-lanzar para que el método principal pueda manejarlo
         }
     }
 
@@ -833,26 +851,87 @@ HTML;
         $baseUrl = $this->getFrontendUrl();
         $ticketUrl = "$baseUrl/tickets";
 
+        // Determinar color y mensaje según el nuevo estado
+        $color = '#2196F3'; // Azul por defecto
+        $mensajeEstado = '';
+        $titulo = 'Cambio de Estado';
+
+        switch ($newStatus) {
+            case 'En Progreso':
+            case 'En proceso':
+                $color = '#4CAF50';
+                $titulo = 'Ticket en Progreso';
+                $mensajeEstado = 'El técnico asignado está trabajando en tu solicitud.';
+                break;
+            case 'Pendiente':
+                $color = '#FF9800';
+                $titulo = 'Ticket Pendiente';
+                $mensajeEstado = 'Tu ticket ha sido marcado como pendiente. Se retomará según el tiempo estimado proporcionado.';
+                break;
+            case 'Finalizado':
+                $color = '#4CAF50';
+                $titulo = 'Ticket Finalizado';
+                $mensajeEstado = 'Tu ticket ha sido finalizado. Por favor, completa la evaluación para cerrarlo.';
+                $ticketUrl = "$baseUrl/tickets/close";
+                break;
+            case 'Cerrado':
+                $color = '#4CAF50';
+                $titulo = 'Ticket Cerrado';
+                $mensajeEstado = 'Tu ticket ha sido cerrado exitosamente.';
+                break;
+            case 'Escalado':
+                $color = '#FF9800';
+                $titulo = 'Ticket Escalado';
+                $mensajeEstado = 'Tu ticket ha sido escalado a un técnico de mayor nivel para su atención.';
+                break;
+            default:
+                $mensajeEstado = 'El estado de tu ticket ha cambiado.';
+        }
+
+        // Información del técnico si está disponible
+        $tecnicoInfo = '';
+        if ($technician && !empty($technician['nombre'])) {
+            $tecnicoInfo = "<p><strong>Técnico asignado:</strong> {$technician['nombre']}</p>";
+        }
+
+        // Información de categoría y subcategoría si está disponible
+        $categoriaInfo = '';
+        if (!empty($ticket['categoria']) && !empty($ticket['subcategoria'])) {
+            $categoriaInfo = "<p><strong>Categoría:</strong> {$ticket['categoria']} - {$ticket['subcategoria']}</p>";
+        }
+
+        // Descripción truncada si está disponible
+        $descripcionInfo = '';
+        if (!empty($ticket['descripcion'])) {
+            $descripcionCorta = strlen($ticket['descripcion']) > 150 
+                ? substr($ticket['descripcion'], 0, 150) . '...' 
+                : $ticket['descripcion'];
+            $descripcionInfo = "<p><strong>Descripción:</strong> " . htmlspecialchars($descripcionCorta) . "</p>";
+        }
+
         return <<<HTML
 <!DOCTYPE html>
 <html lang="es">
 <head>
     <meta charset="UTF-8">
-    <title>Cambio de Estado</title>
+    <title>{$titulo}</title>
 </head>
 <body style="font-family: Arial, sans-serif; background: #f8f9fa; margin:0; padding:0;">
     <div style="max-width: 600px; margin: 30px auto; background: #fff; border-radius: 15px; box-shadow: 0 2px 8px #e0e0e0; padding: 30px;">
-        <h2 style="text-align: center; color: #2196F3; margin-bottom: 10px;">Cambio de Estado</h2>
-        <hr style="border:none; border-top:2px solid #2196F3; margin-bottom: 30px;">
+        <h2 style="text-align: center; color: {$color}; margin-bottom: 10px;">{$titulo}</h2>
+        <hr style="border:none; border-top:2px solid {$color}; margin-bottom: 30px;">
         <p>Hola <strong>{$employee['nombre']}</strong>:</p>
-        <p>El estado de tu ticket ha cambiado:</p>
-        <div style="background: #e3f2fd; border-left: 6px solid #2196F3; padding: 20px; margin: 25px 0;">
+        <p>{$mensajeEstado}</p>
+        <div style="background: #f5f5f5; border-left: 6px solid {$color}; padding: 20px; margin: 25px 0;">
             <p><strong>Ticket #:</strong> {$ticket['id']}</p>
+            {$categoriaInfo}
+            {$descripcionInfo}
             <p><strong>Estado anterior:</strong> {$oldStatus}</p>
-            <p><strong>Nuevo estado:</strong> {$newStatus}</p>
+            <p><strong>Nuevo estado:</strong> <span style="color: {$color}; font-weight: bold;">{$newStatus}</span></p>
+            {$tecnicoInfo}
         </div>
         <div style="text-align: center; margin: 30px 0;">
-            <a href="$ticketUrl" style="background-color: #2196F3; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold; font-size: 16px;">Ver Mis Tickets</a>
+            <a href="$ticketUrl" style="background-color: {$color}; color: white; padding: 12px 30px; text-decoration: none; border-radius: 5px; display: inline-block; font-weight: bold; font-size: 16px;">Ver Mis Tickets</a>
         </div>
         <hr style="border:none; border-top:2px solid #ececec; margin: 32px 0 15px 0;">
         <div style="font-size: 13px; color:#777; text-align: center;">Mesa de Ayuda - ITS<br>No responder a este correo.</div>

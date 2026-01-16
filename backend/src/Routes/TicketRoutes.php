@@ -1282,6 +1282,71 @@ class TicketRoutes
                 // NO bloquear la respuesta si fallan las notificaciones
             }
 
+            // ============================================
+            // ENVIAR CORREOS DE CREACIÓN DE TICKET - DESPUÉS de las notificaciones
+            // ============================================
+            try {
+                error_log("📧 [CORREOS] Enviando correos de creación para ticket #$ticketId");
+
+                // Obtener datos completos del ticket y usuarios
+                $stmtTicketData = $this->db->query(
+                    'SELECT t.id_ticket, t.descripcion, t.prioridad, t.estatus,
+                            s.categoria, s.subcategoria,
+                            u.id_usuario as empleado_id, u.nombre as empleado_nombre, u.correo as empleado_correo,
+                            tec.id_usuario as tecnico_id, tec.nombre as tecnico_nombre, tec.correo as tecnico_correo
+                     FROM tickets t
+                     JOIN servicios s ON t.id_servicio = s.id_servicio
+                     JOIN usuarios u ON t.id_usuario = u.id_usuario
+                     LEFT JOIN usuarios tec ON t.id_tecnico = tec.id_usuario
+                     WHERE t.id_ticket = ?',
+                    [$ticketId]
+                );
+                $ticketData = $stmtTicketData->fetch();
+
+                if ($ticketData) {
+                    $emailService = new EmailService();
+
+                    // Preparar datos del ticket para el correo
+                    $ticketForEmail = [
+                        'id' => $ticketData['id_ticket'],
+                        'categoria' => $ticketData['categoria'],
+                        'subcategoria' => $ticketData['subcategoria'],
+                        'descripcion' => $ticketData['descripcion'] ?? '',
+                        'prioridad' => $ticketData['prioridad'] ?? 'Media'
+                    ];
+
+                    // Preparar datos del empleado
+                    $empleadoForEmail = [
+                        'nombre' => $ticketData['empleado_nombre'] ?? '',
+                        'email' => $ticketData['empleado_correo'] ?? ''
+                    ];
+
+                    // Enviar correo de creación al empleado
+                    $emailService->sendTicketCreatedNotification($ticketForEmail, $empleadoForEmail);
+                    error_log("✅ [CORREOS] Correo de creación enviado al empleado para ticket #$ticketId");
+
+                    // Si hay técnico asignado, enviar correo de asignación
+                    if ($ticketData['tecnico_id'] && $ticketData['tecnico_correo'] && $ticketData['tecnico_id'] != $ticketData['empleado_id']) {
+                        $tecnicoForEmail = [
+                            'nombre' => $ticketData['tecnico_nombre'] ?? '',
+                            'email' => $ticketData['tecnico_correo'] ?? ''
+                        ];
+                        $emailService->sendTicketAssignedNotification(
+                            $ticketForEmail,
+                            $tecnicoForEmail,
+                            $empleadoForEmail
+                        );
+                        error_log("✅ [CORREOS] Correos de asignación enviados para ticket #$ticketId");
+                    }
+                } else {
+                    error_log("⚠️ [CORREOS] No se encontraron datos del ticket #$ticketId para enviar correos");
+                }
+            } catch (\Exception $e) {
+                error_log("❌ [CORREOS] Error enviando correos de creación para ticket #$ticketId: " . $e->getMessage());
+                error_log("❌ [CORREOS] Stack trace: " . $e->getTraceAsString());
+                // NO bloquear la respuesta si fallan los correos
+            }
+
             // Preparar respuesta SIMPLE y DIRECTA - siempre funciona
             $tiempoEstimado = $servicio['tiempo_maximo'] ?? $servicio['tiempo_objetivo'] ?? null;
 
@@ -1994,11 +2059,80 @@ class TicketRoutes
                         // NOTA: No se notifica a todos los administradores en escalamientos
                         // Solo el técnico destino recibe la notificación (que puede ser un administrador si es el destinatario)
                     }
-                } catch (\Exception $e) {
-                    error_log("❌ [NOTIFICACIONES] Error crítico creando notificaciones de cambio de estado para ticket #$id: " . $e->getMessage());
-                    error_log("❌ [NOTIFICACIONES] Stack trace: " . $e->getTraceAsString());
-                    // NO bloquear la respuesta si fallan las notificaciones
-                }
+                    } catch (\Exception $e) {
+                        error_log("❌ [NOTIFICACIONES] Error crítico creando notificaciones de cambio de estado para ticket #$id: " . $e->getMessage());
+                        error_log("❌ [NOTIFICACIONES] Stack trace: " . $e->getTraceAsString());
+                        // NO bloquear la respuesta si fallan las notificaciones
+                    }
+
+                    // ============================================
+                    // ENVIAR CORREOS DE CAMBIO DE ESTADO - DESPUÉS de las notificaciones
+                    // ============================================
+                    try {
+                        error_log("📧 [CORREOS] Enviando correos de cambio de estado para ticket #$id");
+
+                        // Obtener datos completos del ticket actualizado
+                        $stmtTicketData = $this->db->query(
+                            'SELECT t.id_ticket, t.descripcion, t.prioridad, t.estatus,
+                                    s.categoria, s.subcategoria,
+                                    u.id_usuario as empleado_id, u.nombre as empleado_nombre, u.correo as empleado_correo,
+                                    tec.id_usuario as tecnico_id, tec.nombre as tecnico_nombre, tec.correo as tecnico_correo
+                             FROM tickets t
+                             JOIN servicios s ON t.id_servicio = s.id_servicio
+                             JOIN usuarios u ON t.id_usuario = u.id_usuario
+                             LEFT JOIN usuarios tec ON t.id_tecnico = tec.id_usuario
+                             WHERE t.id_ticket = ?',
+                            [$id]
+                        );
+                        $ticketData = $stmtTicketData->fetch();
+
+                        if ($ticketData) {
+                            $emailService = new EmailService();
+
+                            // Preparar datos del ticket para el correo
+                            $ticketForEmail = [
+                                'id' => $ticketData['id_ticket'],
+                                'categoria' => $ticketData['categoria'],
+                                'subcategoria' => $ticketData['subcategoria'],
+                                'descripcion' => $ticketData['descripcion'] ?? '',
+                                'prioridad' => $ticketData['prioridad'] ?? 'Media'
+                            ];
+
+                            // Preparar datos del empleado
+                            $empleadoForEmail = [
+                                'nombre' => $ticketData['empleado_nombre'] ?? '',
+                                'email' => $ticketData['empleado_correo'] ?? ''
+                            ];
+
+                            // Preparar datos del técnico (si existe)
+                            $tecnicoForEmail = null;
+                            if ($ticketData['tecnico_id'] && $ticketData['tecnico_correo']) {
+                                $tecnicoForEmail = [
+                                    'nombre' => $ticketData['tecnico_nombre'] ?? '',
+                                    'email' => $ticketData['tecnico_correo'] ?? ''
+                                ];
+                            }
+
+                            // Enviar correo de cambio de estado
+                            // Solo enviar si hay un cambio real de estado
+                            if ($estadoAnterior !== $estatus) {
+                                $emailService->sendTicketStatusChangeNotification(
+                                    $ticketForEmail,
+                                    $estatus,
+                                    $estadoAnterior,
+                                    $tecnicoForEmail,
+                                    $empleadoForEmail
+                                );
+                                error_log("✅ [CORREOS] Correos de cambio de estado enviados para ticket #$id");
+                            }
+                        } else {
+                            error_log("⚠️ [CORREOS] No se encontraron datos del ticket #$id para enviar correos");
+                        }
+                    } catch (\Exception $e) {
+                        error_log("❌ [CORREOS] Error enviando correos de cambio de estado para ticket #$id: " . $e->getMessage());
+                        error_log("❌ [CORREOS] Stack trace: " . $e->getTraceAsString());
+                        // NO bloquear la respuesta si fallan los correos
+                    }
             }
 
             // Obtener datos actualizados del ticket para la respuesta
